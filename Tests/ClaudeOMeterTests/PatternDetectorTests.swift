@@ -171,29 +171,85 @@ final class PatternDetectorTests: XCTestCase {
     // MARK: - Context bloat
 
     func testContextBloatDetected() {
-        // input = 10M, output = 100K → ratio = 100 ≥ 25
+        // 12M opus taxable cache-read → $6.00 recoverable: clears the $5 floor and is
+        // well above 5% of the ~$7 seven-day spend.
         let now = Date()
         var aggs = uniformAggs(perDay: 1.0, now: now)
         let day = DayBucket.day(daysAgo: 1, from: now)
         var d = DailyAggregate(day: day)
-        d.perModel["sonnet"] = ModelUsage(model: "sonnet", rawModel: "claude-sonnet-4-6",
-                                           usage: TokenUsage(input: 10_000_000, output: 100_000), cost: 1.0)
+        d.perModel["opus"] = ModelUsage(model: "opus", rawModel: "claude-opus-4-8",
+                                        usage: TokenUsage(cacheRead: 12_000_000), cost: 1.0)
+        d.taxableCacheRead["opus"] = 12_000_000
         aggs[day] = d
-        let insights = PatternDetector.detect(aggregates: aggs, now: now)
-        XCTAssertTrue(insights.contains { $0.id == "context_bloat" })
+        let insights = PatternDetector.detect(aggregates: aggs, pricing: .default, now: now)
+        let bloat = insights.first { $0.id == "context_bloat" }
+        XCTAssertNotNil(bloat)
+        // 12M cache-read × $0.50/1M (opus family fallback) = $6.00.
+        XCTAssertTrue(bloat?.title.contains("$6.00") ?? false, "title was: \(bloat?.title ?? "nil")")
     }
 
-    func testContextBloatNotFiredWhenOutputIsZero() {
-        // output = 0 → division guard prevents context_bloat
+    func testContextBloatUsesExactPerVersionRate() {
+        // claude-opus-4-1 cache-read is $1.50/1M exact (3× the family fallback). The insight
+        // must price with the day's rawModel, so 4M tokens → $6.00, not $2.00.
         let now = Date()
         var aggs = uniformAggs(perDay: 1.0, now: now)
         let day = DayBucket.day(daysAgo: 1, from: now)
         var d = DailyAggregate(day: day)
-        d.perModel["sonnet"] = ModelUsage(model: "sonnet", rawModel: "claude-sonnet-4-6",
-                                           usage: TokenUsage(input: 1_000_000, output: 0), cost: 1.0)
+        d.perModel["opus"] = ModelUsage(model: "opus", rawModel: "claude-opus-4-1",
+                                        usage: TokenUsage(cacheRead: 4_000_000), cost: 1.0)
+        d.taxableCacheRead["opus"] = 4_000_000
+        aggs[day] = d
+        let insights = PatternDetector.detect(aggregates: aggs, pricing: .default, now: now)
+        let bloat = insights.first { $0.id == "context_bloat" }
+        XCTAssertNotNil(bloat, "4M × $1.50/1M = $6.00 should clear the $5 floor")
+        XCTAssertTrue(bloat?.title.contains("$6.00") ?? false, "title was: \(bloat?.title ?? "nil")")
+    }
+
+    func testContextBloatNotFiredBelowDollarFloor() {
+        // 4M opus taxable cache-read → $2.00, under the $5 absolute floor → suppressed.
+        let now = Date()
+        var aggs = uniformAggs(perDay: 1.0, now: now)
+        let day = DayBucket.day(daysAgo: 1, from: now)
+        var d = DailyAggregate(day: day)
+        d.perModel["opus"] = ModelUsage(model: "opus", rawModel: "claude-opus-4-8",
+                                        usage: TokenUsage(cacheRead: 4_000_000), cost: 1.0)
+        d.taxableCacheRead["opus"] = 4_000_000
         aggs[day] = d
         let insights = PatternDetector.detect(aggregates: aggs, now: now)
         XCTAssertFalse(insights.contains { $0.id == "context_bloat" })
+    }
+
+    func testContextBloatNotFiredBelowProportionalFloor() {
+        // $6 recoverable clears the $5 floor but is under 5% of a $210 week → suppressed.
+        let now = Date()
+        var aggs = uniformAggs(perDay: 30.0, now: now)
+        let day = DayBucket.day(daysAgo: 1, from: now)
+        var d = DailyAggregate(day: day)
+        d.perModel["opus"] = ModelUsage(model: "opus", rawModel: "claude-opus-4-8",
+                                        usage: TokenUsage(cacheRead: 12_000_000), cost: 30.0)
+        d.taxableCacheRead["opus"] = 12_000_000
+        aggs[day] = d
+        let insights = PatternDetector.detect(aggregates: aggs, now: now)
+        XCTAssertFalse(insights.contains { $0.id == "context_bloat" })
+    }
+
+    func testContextBloatDetailNamesTopProject() {
+        // Two projects with tax; proj-b carries more → detail should name it.
+        let now = Date()
+        var aggs = uniformAggs(perDay: 1.0, now: now)
+        let day = DayBucket.day(daysAgo: 1, from: now)
+        var d = DailyAggregate(day: day)
+        d.perModel["opus"] = ModelUsage(model: "opus", rawModel: "claude-opus-4-8",
+                                        usage: TokenUsage(cacheRead: 12_000_000), cost: 1.0)
+        d.taxableCacheRead["opus"] = 12_000_000
+        d.perProject["-Users-me-git-proj-a"] = ProjectUsage(taxableCacheRead: ["opus": 3_000_000])
+        d.perProject["-Users-me-git-proj-b"] = ProjectUsage(taxableCacheRead: ["opus": 9_000_000])
+        aggs[day] = d
+        let insights = PatternDetector.detect(aggregates: aggs, now: now)
+        let bloat = insights.first { $0.id == "context_bloat" }
+        XCTAssertNotNil(bloat)
+        XCTAssertTrue(bloat?.detail.contains("proj-b") ?? false,
+                      "Expected the detail to name the top-tax project proj-b")
     }
 
     // MARK: - Burnrate projection

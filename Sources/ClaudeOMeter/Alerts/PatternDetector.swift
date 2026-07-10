@@ -27,6 +27,7 @@ enum PatternDetector {
         aggregates: [String: DailyAggregate],
         settings: AlertSettings = AlertSettings(),
         concurrency: ConcurrencyStats = ConcurrencyStats(),
+        pricing: PricingTable = .default,
         now: Date = Date()
     ) -> [PatternInsight] {
         var insights: [PatternInsight] = []
@@ -106,18 +107,31 @@ enum PatternDetector {
             }
         }
 
-        // --- Context bloat: high input-to-output ratio ---
-        let totalInput7  = last7.flatMap { $0.perModel.values }.reduce(0) { $0 + $1.usage.input }
-        let totalOutput7 = last7.flatMap { $0.perModel.values }.reduce(0) { $0 + $1.usage.output }
-        if totalInput7 >= 100_000, totalOutput7 > 0 {
-            let ratio = Double(totalInput7) / Double(totalOutput7)
-            if ratio >= 25 {
-                insights.append(PatternInsight(
-                    id: "context_bloat", kind: .bad,
-                    title: "Context-to-output ratio is \(Int(ratio)):1",
-                    detail: "You're sending \(Int(ratio))× more tokens than you receive — a sign of stale context carryover. Use /compact or start fresh sessions more often."
-                ))
+        // --- Context bloat: recoverable dollars from cache-read re-read above the healthy cap ---
+        // Priced from stored taxable tokens so it tracks current pricing.json. Shown only when the
+        // recoverable amount is both materially large ($5+) and a meaningful slice of spend (5%+),
+        // so disciplined-but-heavy users aren't nagged.
+        // Price per day-family using the day's actual rawModel so exact per-version rates
+        // (e.g. claude-opus-4-1 reads cost 3× the family fallback) aren't undercounted.
+        var contextTax = 0.0
+        for agg in last7 {
+            for (fam, tokens) in agg.taxableCacheRead {
+                let rawModel = agg.perModel[fam]?.rawModel ?? fam
+                contextTax += pricing.cost(of: TokenUsage(cacheRead: tokens), family: fam, rawModel: rawModel)
             }
+        }
+        if contextTax >= 5.0, contextTax >= last7Cost * 0.05 {
+            let capK = Aggregator.healthyContextCap / 1000
+            var detail = "Over the last 7 days you paid ~\(Fmt.usd(contextTax)) in avoidable cache reads — re-reading context above a healthy ~\(capK)K working size."
+            if let top = topContextTaxProject(last7, pricing: pricing) {
+                detail += " Most of it is in \(top)."
+            }
+            detail += " Run /compact before sessions balloon, or /clear between tasks."
+            insights.append(PatternInsight(
+                id: "context_bloat", kind: .bad,
+                title: "~\(Fmt.usd(contextTax)) recoverable from context bloat",
+                detail: detail
+            ))
         }
 
         // --- Month-end burn rate projection ---
@@ -220,6 +234,24 @@ enum PatternDetector {
 
     private static func window(_ aggs: [String: DailyAggregate], from start: Int, count: Int, now: Date = Date()) -> [DailyAggregate] {
         (start..<(start + count)).compactMap { aggs[DayBucket.day(daysAgo: $0, from: now)] }
+    }
+
+    /// The project carrying the most priced context tax across the given days, as a display name.
+    /// Returns nil if no project has any taxable cache-read.
+    private static func topContextTaxProject(_ aggs: [DailyAggregate], pricing: PricingTable) -> String? {
+        var taxByDir: [String: Double] = [:]
+        for agg in aggs {
+            for (dir, usage) in agg.perProject {
+                for (fam, tokens) in usage.taxableCacheRead {
+                    let rawModel = agg.perModel[fam]?.rawModel ?? fam
+                    taxByDir[dir, default: 0] += pricing.cost(
+                        of: TokenUsage(cacheRead: tokens), family: fam, rawModel: rawModel
+                    )
+                }
+            }
+        }
+        guard let topDir = taxByDir.max(by: { $0.value < $1.value })?.key else { return nil }
+        return TranscriptScanner.projectDisplayName(from: topDir)
     }
 
     /// Count lines in ~/.claude/CLAUDE.md plus any @-imported files (Claude Code import syntax).

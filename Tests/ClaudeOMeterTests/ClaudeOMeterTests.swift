@@ -348,6 +348,76 @@ final class ClaudeOMeterTests: XCTestCase {
         XCTAssertEqual(aggs["2026-06-20"]?.totalCost ?? 0, 5.0, accuracy: 1e-9)
     }
 
+    // MARK: - Context tax (taxable cache-read)
+
+    func testTaxableCacheReadZeroBelowCap() {
+        // ctx = 100k input + 50k cacheRead = 150k, under the 200k cap → no tax.
+        let r = UsageRecord(id: "a", day: "2026-06-20", model: "opus", rawModel: "claude-opus-4-8",
+                            usage: TokenUsage(input: 100_000, cacheRead: 50_000), projectDir: "")
+        XCTAssertEqual(Aggregator.taxableCacheRead(for: r), 0)
+    }
+
+    func testTaxableCacheReadAboveCap() {
+        // ctx = 300k (all cacheRead). over = (300k-200k)/300k = 1/3.
+        // taxable = round(300k × 1/3) = 100_000.
+        let r = UsageRecord(id: "a", day: "2026-06-20", model: "opus", rawModel: "claude-opus-4-8",
+                            usage: TokenUsage(cacheRead: 300_000), projectDir: "")
+        XCTAssertEqual(Aggregator.taxableCacheRead(for: r), 100_000)
+    }
+
+    func testTaxableCacheReadZeroForSynthetic() {
+        let r = UsageRecord(id: "a", day: "2026-06-20", model: ModelNormalizer.syntheticFamily,
+                            rawModel: "<synthetic>",
+                            usage: TokenUsage(cacheRead: 300_000), projectDir: "")
+        XCTAssertEqual(Aggregator.taxableCacheRead(for: r), 0)
+    }
+
+    func testTaxableCacheReadZeroWithNoCacheRead() {
+        // Above the cap on input alone, but no cache-read to tax.
+        let r = UsageRecord(id: "a", day: "2026-06-20", model: "opus", rawModel: "claude-opus-4-8",
+                            usage: TokenUsage(input: 300_000), projectDir: "")
+        XCTAssertEqual(Aggregator.taxableCacheRead(for: r), 0)
+    }
+
+    func testFoldAccumulatesTaxableCacheReadPerFamilyAndProject() {
+        var aggs: [String: DailyAggregate] = [:]
+        // Two above-cap opus turns in different projects; one below-cap turn adds nothing.
+        let r1 = UsageRecord(id: "a", day: "2026-06-20", model: "opus", rawModel: "claude-opus-4-8",
+                             usage: TokenUsage(cacheRead: 300_000), projectDir: "proj-a")  // taxable 100k
+        let r2 = UsageRecord(id: "b", day: "2026-06-20", model: "opus", rawModel: "claude-opus-4-8",
+                             usage: TokenUsage(cacheRead: 400_000), projectDir: "proj-b")  // over=1/2 → 200k
+        let r3 = UsageRecord(id: "c", day: "2026-06-20", model: "opus", rawModel: "claude-opus-4-8",
+                             usage: TokenUsage(cacheRead: 50_000), projectDir: "proj-a")   // below cap → 0
+        Aggregator.fold(records: [r1, r2, r3], into: &aggs, pricing: .default)
+
+        let day = aggs["2026-06-20"]
+        XCTAssertEqual(day?.taxableCacheRead["opus"], 300_000)                 // 100k + 200k
+        XCTAssertEqual(day?.perProject["proj-a"]?.taxableCacheRead["opus"], 100_000)
+        XCTAssertEqual(day?.perProject["proj-b"]?.taxableCacheRead["opus"], 200_000)
+    }
+
+    func testDecodesOldAggregateWithoutTaxableCacheRead() {
+        // An old state.json predating the context-tax field must decode without throwing —
+        // otherwise the whole [String: DailyAggregate] decode fails and wipes history. The
+        // missing taxableCacheRead (both on the day and on each project) defaults to empty.
+        let json = #"""
+        {
+          "day": "2026-06-20",
+          "perModel": { "opus": { "model": "opus", "rawModel": "claude-opus-4-8",
+            "usage": { "input": 1000000, "output": 0, "cacheRead": 0, "cacheWrite5m": 0, "cacheWrite1h": 0 },
+            "cost": 5.0 } },
+          "perProject": { "proj-a": { "cost": 5.0, "perModel": { "opus": 5.0 } } }
+        }
+        """#
+        let agg = try? JSONDecoder().decode(DailyAggregate.self, from: Data(json.utf8))
+        XCTAssertNotNil(agg, "old aggregate without taxableCacheRead must decode")
+        XCTAssertEqual(agg?.taxableCacheRead, [:])
+        XCTAssertEqual(agg?.perModel["opus"]?.cost ?? 0, 5.0, accuracy: 1e-9)
+        XCTAssertEqual(agg?.perProject["proj-a"]?.cost ?? 0, 5.0, accuracy: 1e-9)
+        XCTAssertEqual(agg?.perProject["proj-a"]?.perModel["opus"] ?? 0, 5.0, accuracy: 1e-9)
+        XCTAssertEqual(agg?.perProject["proj-a"]?.taxableCacheRead, [:])
+    }
+
     func testPruneDropsOldDays() {
         var aggs: [String: DailyAggregate] = [
             "2026-05-01": DailyAggregate(day: "2026-05-01"),

@@ -33,14 +33,18 @@ final class UsageStore: ObservableObject {
         self.pricing = Persistence.loadPricing()
         self.settings = snapshot.settings
 
-        // Migration: perProject tracking was added in dataVersion 1. Clear scan state
-        // and aggregates so the next scan re-processes all JSONL files with projectDir
-        // tracking. Settings and alert state are preserved.
-        if snapshot.dataVersion < 1 {
-            AppLog.shared.info("migrating to dataVersion 1: clearing scan state for project tracking", category: "migration")
+        // Migration: a full re-scan is required when the record→aggregate fold gains a new
+        // field that can only be computed at fold time (it can't be backfilled from summed
+        // aggregates, and deduped message IDs are never re-folded otherwise).
+        //   v1: perProject tracking.
+        //   v2: taxableCacheRead (context-tax tokens) — added for the context_bloat insight.
+        // Clearing scan state and aggregates forces the next scan to re-process every JSONL
+        // file. Settings and alert state are preserved.
+        if snapshot.dataVersion < 2 {
+            AppLog.shared.info("migrating to dataVersion 2: clearing scan state to backfill context-tax tokens", category: "migration")
             snapshot.scanState = ScanState()
             snapshot.aggregates = [:]
-            snapshot.dataVersion = 1
+            snapshot.dataVersion = 2
             Persistence.save(snapshot)
         }
 
@@ -160,11 +164,12 @@ final class UsageStore: ObservableObject {
         Aggregator.recost(&snapshot.aggregates, pricing: pricing)
         snapshot.pricingVersion = pricing.version ?? 0
         rebuildPublished()
+        runTips()
         persist()
     }
 
     private func runTips() {
-        let detected = PatternDetector.detect(aggregates: snapshot.aggregates, settings: settings, concurrency: snapshot.todayConcurrency)
+        let detected = PatternDetector.detect(aggregates: snapshot.aggregates, settings: settings, concurrency: snapshot.todayConcurrency, pricing: pricing)
         tips = detected
         guard settings.tipsEnabled else { return }
         let toNotify = PatternDetector.tipsToNotify(

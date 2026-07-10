@@ -3,6 +3,24 @@ import Foundation
 /// Pure folding of usage records into per-day aggregates. Kept separate from the store
 /// so it is trivially testable.
 enum Aggregator {
+    /// Healthy live-context cap (tokens). A disciplined session rarely needs more; above this,
+    /// the cache-read that re-reads the older context is avoidable "context tax".
+    static let healthyContextCap = 200_000
+
+    /// Avoidable cache-read tokens on a single turn: the fraction of this turn's cache-read that
+    /// re-read context above `healthyContextCap`. Non-linear per turn, so it must be accumulated at
+    /// fold time — it cannot be reconstructed from summed daily aggregates. Zero for synthetic turns,
+    /// turns with no cache-read, or turns whose whole context is under the cap.
+    static func taxableCacheRead(for rec: UsageRecord) -> Int {
+        guard rec.model != ModelNormalizer.syntheticFamily else { return 0 }
+        let u = rec.usage
+        guard u.cacheRead > 0 else { return 0 }
+        let ctx = u.input + u.cacheWrite5m + u.cacheWrite1h + u.cacheRead
+        guard ctx > healthyContextCap else { return 0 }
+        let over = Double(ctx - healthyContextCap) / Double(ctx)
+        return Int((Double(u.cacheRead) * over).rounded())
+    }
+
     /// Fold new records into `aggregates`, recomputing per-model cost with `pricing`.
     static func fold(
         records: [UsageRecord],
@@ -17,11 +35,16 @@ enum Aggregator {
             model.rawModel = rec.rawModel   // always use the latest rawModel seen for this family/day
             model.cost = pricing.cost(of: model.usage, family: rec.model, rawModel: rec.rawModel)
             day.perModel[rec.model] = model
+
+            let taxable = taxableCacheRead(for: rec)
+            if taxable > 0 { day.taxableCacheRead[rec.model, default: 0] += taxable }
+
             if !rec.projectDir.isEmpty {
                 let delta = model.cost - prevCost
                 var pu = day.perProject[rec.projectDir] ?? ProjectUsage()
                 pu.cost += delta
                 pu.perModel[rec.model, default: 0] += delta
+                if taxable > 0 { pu.taxableCacheRead[rec.model, default: 0] += taxable }
                 day.perProject[rec.projectDir] = pu
             }
             aggregates[rec.day] = day

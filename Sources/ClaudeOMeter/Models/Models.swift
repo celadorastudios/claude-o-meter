@@ -55,6 +55,21 @@ struct ModelUsage: Codable, Sendable, Equatable {
 struct ProjectUsage: Codable, Sendable, Equatable {
     var cost: Double = 0
     var perModel: [String: Double] = [:]   // model family → cost
+    /// model family → avoidable cache-read tokens re-read above the healthy context cap (context tax).
+    var taxableCacheRead: [String: Int] = [:]
+
+    init(cost: Double = 0, perModel: [String: Double] = [:], taxableCacheRead: [String: Int] = [:]) {
+        self.cost = cost; self.perModel = perModel; self.taxableCacheRead = taxableCacheRead
+    }
+    // Custom decoder so old state.json (no taxableCacheRead) decodes without throwing, which would
+    // otherwise cascade to the enclosing [String:ProjectUsage] decode and wipe all perProject data.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        cost             = (try? c.decodeIfPresent(Double.self,          forKey: .cost))             ?? 0
+        perModel         = (try? c.decodeIfPresent([String: Double].self, forKey: .perModel))         ?? [:]
+        taxableCacheRead = (try? c.decodeIfPresent([String: Int].self,   forKey: .taxableCacheRead)) ?? [:]
+    }
+    private enum CodingKeys: String, CodingKey { case cost, perModel, taxableCacheRead }
 }
 
 /// All usage for one local calendar day.
@@ -63,6 +78,9 @@ struct DailyAggregate: Codable, Sendable, Equatable {
     var perModel: [String: ModelUsage] = [:]
     /// Encoded project dir → usage for this day. Accumulated incrementally; not repriced on pricing changes.
     var perProject: [String: ProjectUsage] = [:]
+    /// model family → avoidable cache-read tokens re-read above the healthy context cap (context tax).
+    /// Stored as tokens (not dollars) so it reprices for free when pricing.json changes.
+    var taxableCacheRead: [String: Int] = [:]
 
     // Custom decoder so old state.json with perProject:[String:Double] degrades gracefully to [:].
     init(day: String) { self.day = day }
@@ -71,8 +89,9 @@ struct DailyAggregate: Codable, Sendable, Equatable {
         day      = try c.decode(String.self, forKey: .day)
         perModel = try c.decode([String: ModelUsage].self, forKey: .perModel)
         perProject = (try? c.decode([String: ProjectUsage].self, forKey: .perProject)) ?? [:]
+        taxableCacheRead = (try? c.decodeIfPresent([String: Int].self, forKey: .taxableCacheRead)) ?? [:]
     }
-    private enum CodingKeys: String, CodingKey { case day, perModel, perProject }
+    private enum CodingKeys: String, CodingKey { case day, perModel, perProject, taxableCacheRead }
 
     var totalCost: Double { perModel.values.reduce(0) { $0 + $1.cost } }
     var totalTokens: Int { perModel.values.reduce(0) { $0 + $1.usage.total } }

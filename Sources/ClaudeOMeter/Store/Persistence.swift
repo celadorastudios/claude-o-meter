@@ -39,7 +39,8 @@ enum Persistence {
         /// reapply current rates before the first display pass.
         var pricingVersion: Int = 0
         /// Tracks data-model migrations that require a full re-scan.
-        /// 0 = pre-project-tracking; 1 = perProject populated from scan.
+        /// 0 = pre-project-tracking; 1 = perProject populated from scan;
+        /// 2 = taxableCacheRead (context-tax tokens) populated from scan.
         var dataVersion: Int = 0
         var todayConcurrency: ConcurrencyStats = ConcurrencyStats()
 
