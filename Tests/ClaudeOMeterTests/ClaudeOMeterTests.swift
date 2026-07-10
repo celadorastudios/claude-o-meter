@@ -448,6 +448,60 @@ final class ClaudeOMeterTests: XCTestCase {
         XCTAssertEqual(aggs["2026-06-20"]?.perModel["opus"]?.cost ?? 0, 8.0, accuracy: 1e-9)
     }
 
+    // MARK: - Data-model migration
+
+    func testMigrateBumpsStuckV2AndClearsScanStateAndAggregates() {
+        // Reproduces the context_bloat regression: a client stuck at dataVersion 2 with empty
+        // taxableCacheRead. Migration must clear scanState + aggregates so the next scan re-folds
+        // and backfills context-tax tokens — while preserving settings and alert/tip state.
+        var snap = Persistence.Snapshot()
+        snap.dataVersion = 2
+        snap.aggregates = ["2026-06-20": DailyAggregate(day: "2026-06-20")]
+        snap.scanState.cursors = ["/a.jsonl": 100]
+        snap.scanState.seenIDs = ["id": "2026-06-20"]
+        snap.settings = AlertSettings(dailyThreshold: 25, monthlyThreshold: 300)
+        snap.lastAlertDay = ["daily": "2026-06-20"]
+        snap.lastTipDay = ["opus_heavy": "2026-06-20"]
+
+        let result = Persistence.migrate(snap)
+
+        XCTAssertTrue(result.didMigrate)
+        XCTAssertEqual(result.snapshot.dataVersion, Persistence.currentDataVersion)
+        XCTAssertTrue(result.snapshot.aggregates.isEmpty)
+        XCTAssertTrue(result.snapshot.scanState.cursors.isEmpty)
+        XCTAssertTrue(result.snapshot.scanState.seenIDs.isEmpty)
+        XCTAssertEqual(result.snapshot.settings.dailyThreshold, 25)
+        XCTAssertEqual(result.snapshot.settings.monthlyThreshold, 300)
+        XCTAssertEqual(result.snapshot.lastAlertDay["daily"], "2026-06-20")
+        XCTAssertEqual(result.snapshot.lastTipDay["opus_heavy"], "2026-06-20")
+    }
+
+    func testMigrateIsNoOpAtCurrentVersion() {
+        var snap = Persistence.Snapshot()
+        snap.dataVersion = Persistence.currentDataVersion
+        snap.aggregates = ["2026-06-20": DailyAggregate(day: "2026-06-20")]
+        snap.scanState.cursors = ["/a.jsonl": 100]
+
+        let result = Persistence.migrate(snap)
+
+        XCTAssertFalse(result.didMigrate)
+        XCTAssertEqual(result.snapshot.dataVersion, Persistence.currentDataVersion)
+        XCTAssertFalse(result.snapshot.aggregates.isEmpty, "current-version data must be left intact")
+        XCTAssertFalse(result.snapshot.scanState.cursors.isEmpty)
+    }
+
+    func testMigrateFromPreProjectVersionAlsoReScans() {
+        var snap = Persistence.Snapshot()
+        snap.dataVersion = 0
+        snap.aggregates = ["2026-06-20": DailyAggregate(day: "2026-06-20")]
+
+        let result = Persistence.migrate(snap)
+
+        XCTAssertTrue(result.didMigrate)
+        XCTAssertEqual(result.snapshot.dataVersion, Persistence.currentDataVersion)
+        XCTAssertTrue(result.snapshot.aggregates.isEmpty)
+    }
+
     // MARK: - Day bucketing
 
     func testLocalDayParsesISO() {

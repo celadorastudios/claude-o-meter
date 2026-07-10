@@ -33,18 +33,13 @@ final class UsageStore: ObservableObject {
         self.pricing = Persistence.loadPricing()
         self.settings = snapshot.settings
 
-        // Migration: a full re-scan is required when the record→aggregate fold gains a new
-        // field that can only be computed at fold time (it can't be backfilled from summed
-        // aggregates, and deduped message IDs are never re-folded otherwise).
-        //   v1: perProject tracking.
-        //   v2: taxableCacheRead (context-tax tokens) — added for the context_bloat insight.
-        // Clearing scan state and aggregates forces the next scan to re-process every JSONL
-        // file. Settings and alert state are preserved.
-        if snapshot.dataVersion < 2 {
-            AppLog.shared.info("migrating to dataVersion 2: clearing scan state to backfill context-tax tokens", category: "migration")
-            snapshot.scanState = ScanState()
-            snapshot.aggregates = [:]
-            snapshot.dataVersion = 2
+        // A full re-scan is required when the record→aggregate fold gains a new field that
+        // can only be computed at fold time (it can't be backfilled from summed aggregates,
+        // and deduped message IDs are never re-folded otherwise). See Persistence.migrate.
+        let migration = Persistence.migrate(snapshot)
+        if migration.didMigrate {
+            AppLog.shared.info("migrating to dataVersion \(Persistence.currentDataVersion): clearing scan state to backfill context-tax tokens", category: "migration")
+            snapshot = migration.snapshot
             Persistence.save(snapshot)
         }
 

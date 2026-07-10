@@ -40,7 +40,8 @@ enum Persistence {
         var pricingVersion: Int = 0
         /// Tracks data-model migrations that require a full re-scan.
         /// 0 = pre-project-tracking; 1 = perProject populated from scan;
-        /// 2 = taxableCacheRead (context-tax tokens) populated from scan.
+        /// 2 = taxableCacheRead (context-tax tokens) populated from scan;
+        /// 3 = repair re-fold for clients stuck at v2 with empty taxableCacheRead.
         var dataVersion: Int = 0
         var todayConcurrency: ConcurrencyStats = ConcurrencyStats()
 
@@ -83,6 +84,29 @@ enum Persistence {
         } catch {
             AppLog.shared.error("failed to save state: \(error)", category: "persistence")
         }
+    }
+
+    /// Current on-disk data-model version. Bump whenever the fold gains a field that can only
+    /// be computed at fold time (fold-time fields can't be backfilled from summed aggregates,
+    /// and deduped message IDs are never re-folded otherwise).
+    ///   v1: perProject tracking.
+    ///   v2: taxableCacheRead (context-tax tokens) — added for the context_bloat insight.
+    ///   v3: repair re-fold for clients stuck at v2 — a build that stamped dataVersion 2 before
+    ///       the taxable fold was correct leaves taxableCacheRead permanently empty (the one-shot
+    ///       v2 guard never re-fires), so context_bloat can never surface. Re-fold to backfill.
+    static let currentDataVersion = 3
+
+    /// Pure migration to `currentDataVersion`. When the stored version is older, scanState and
+    /// aggregates are cleared so the next scan re-folds every JSONL file; settings and alert/tip
+    /// state are preserved. Returns a new snapshot (never mutates the input) and whether a
+    /// migration occurred so the caller can persist and log only when something changed.
+    static func migrate(_ snapshot: Snapshot) -> (snapshot: Snapshot, didMigrate: Bool) {
+        guard snapshot.dataVersion < currentDataVersion else { return (snapshot, false) }
+        var migrated = snapshot
+        migrated.scanState = ScanState()
+        migrated.aggregates = [:]
+        migrated.dataVersion = currentDataVersion
+        return (migrated, true)
     }
 
     /// Load user pricing.json, seeding or auto-upgrading from the bundled copy when needed.

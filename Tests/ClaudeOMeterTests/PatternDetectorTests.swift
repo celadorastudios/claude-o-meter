@@ -252,6 +252,39 @@ final class PatternDetectorTests: XCTestCase {
                       "Expected the detail to name the top-tax project proj-b")
     }
 
+    /// End-to-end: raw records → Aggregator.fold → detect. Every other context_bloat test
+    /// hand-sets `taxableCacheRead`, bypassing the fold — but the fold is exactly the seam
+    /// that broke in production (a new fold-time field left empty because deduped IDs are
+    /// never re-folded). This exercises the whole pipeline so a regression there is caught.
+    func testContextBloatEndToEndFromFoldedRecords() {
+        let now = Date()
+        let projectDir = "-Users-me-git-bloaty"
+        var aggs: [String: DailyAggregate] = [:]
+
+        // One opus turn per day across the 7-day window, each re-reading 2M cached tokens with a
+        // whole-turn context above the 200K cap. With input/writes = 0, taxable = cacheRead - cap
+        // = 1.8M/day → 12.6M over 7 days → priced at opus $0.50/1M = $6.30 recoverable.
+        for i in 1...7 {
+            let day = DayBucket.day(daysAgo: i, from: now)
+            let rec = UsageRecord(
+                id: "msg-\(i)", day: day, model: "opus", rawModel: "claude-opus-4-8",
+                usage: TokenUsage(cacheRead: 2_000_000), projectDir: projectDir
+            )
+            Aggregator.fold(records: [rec], into: &aggs, pricing: .default)
+        }
+
+        // Sanity: the fold populated the taxable field (the regression left this empty).
+        let foldedTaxable = aggs.values.reduce(0) { $0 + ($1.taxableCacheRead["opus"] ?? 0) }
+        XCTAssertEqual(foldedTaxable, 12_600_000, "fold should accumulate taxable cache-read tokens")
+
+        let insights = PatternDetector.detect(aggregates: aggs, pricing: .default, now: now)
+        let bloat = insights.first { $0.id == "context_bloat" }
+        XCTAssertNotNil(bloat, "context_bloat should fire from folded records, not just hand-set tokens")
+        XCTAssertTrue(bloat?.title.contains("$6.30") ?? false, "title was: \(bloat?.title ?? "nil")")
+        XCTAssertTrue(bloat?.detail.contains("bloaty") ?? false,
+                      "per-project taxable fold should let the detail name the top project: \(bloat?.detail ?? "nil")")
+    }
+
     // MARK: - Burnrate projection
 
     func testBurnrateDetectedWhenProjectedHighEnough() {
