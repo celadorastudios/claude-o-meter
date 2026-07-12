@@ -418,6 +418,26 @@ final class ClaudeOMeterTests: XCTestCase {
         XCTAssertEqual(agg?.perProject["proj-a"]?.taxableCacheRead, [:])
     }
 
+    func testDecodesOldSettingsWithoutProjectsConfigDirOverride() {
+        // An old state.json's AlertSettings predating the transcript-root override must decode
+        // without throwing; the missing field defaults to nil (use env var / default root).
+        let missing = #"{ "dailyThreshold": 5.0, "tipsEnabled": true, "approachPercent": 80 }"#
+        let s1 = try? JSONDecoder().decode(AlertSettings.self, from: Data(missing.utf8))
+        XCTAssertNotNil(s1, "old settings without projectsConfigDirOverride must decode")
+        XCTAssertNil(s1?.projectsConfigDirOverride)
+
+        // An explicit null decodes to nil as well.
+        let explicitNull = #"{ "projectsConfigDirOverride": null }"#
+        let s2 = try? JSONDecoder().decode(AlertSettings.self, from: Data(explicitNull.utf8))
+        XCTAssertNotNil(s2)
+        XCTAssertNil(s2?.projectsConfigDirOverride)
+
+        // A stored string value round-trips.
+        let withValue = #"{ "projectsConfigDirOverride": "~/.claude/cpm/profiles/personal" }"#
+        let s3 = try? JSONDecoder().decode(AlertSettings.self, from: Data(withValue.utf8))
+        XCTAssertEqual(s3?.projectsConfigDirOverride, "~/.claude/cpm/profiles/personal")
+    }
+
     func testPruneDropsOldDays() {
         var aggs: [String: DailyAggregate] = [
             "2026-05-01": DailyAggregate(day: "2026-05-01"),

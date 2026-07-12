@@ -19,19 +19,29 @@ final class UsageStore: ObservableObject {
     @Published private(set) var isCheckingForUpdate = false
     @Published private(set) var updateCheckOutcome: UpdateCheckOutcome?
     @Published var settings: AlertSettings {
-        didSet { snapshot.settings = settings; persist() }
+        didSet { applySettingsChange(from: oldValue) }
     }
 
     private var snapshot: Persistence.Snapshot
     private var pricing: PricingTable
-    private let scanner = TranscriptScanner()
+    private var scanner: TranscriptScanner
     private var timer: Timer?
     private var lastUpdateCheck: Date?
+    /// Bumped whenever the transcript root changes. A scan captures the epoch at dispatch and its
+    /// result is discarded if the epoch no longer matches, so an in-flight old-root scan can never
+    /// fold stale records back into a snapshot that a root change just cleared.
+    private var scanEpoch = 0
+
+    /// The `projects/` directory currently being scanned, for display in settings.
+    var resolvedRootPath: String { scanner.rootDirectory.path }
 
     init() {
         self.snapshot = Persistence.loadSnapshot()
         self.pricing = Persistence.loadPricing()
         self.settings = snapshot.settings
+        let resolvedRoot = ProjectsRoot.resolve(override: snapshot.settings.projectsConfigDirOverride)
+        self.scanner = TranscriptScanner(rootDirectory: resolvedRoot)
+        AppLog.shared.info("scanning transcript root: \(resolvedRoot.path)", category: "scan")
 
         // A full re-scan is required when the record→aggregate fold gains a new field that
         // can only be computed at fold time (it can't be backfilled from summed aggregates,
@@ -119,6 +129,7 @@ final class UsageStore: ObservableObject {
         guard !isRefreshing else { return }
         isRefreshing = true
         let currentState = snapshot.scanState
+        let epoch = scanEpoch
 
         Task {
             // Scan off the main actor; value types cross the boundary safely.
@@ -126,8 +137,15 @@ final class UsageStore: ObservableObject {
                 scanner.scan(state: currentState)
             }.value
 
-            self.apply(result)
             self.isRefreshing = false
+            // Discard a scan whose root was swapped out from under it (see scanEpoch): applying
+            // its old-root records would undo the clear performed by applySettingsChange. Kick off
+            // a fresh scan of the new root, which the in-flight guard had blocked until now.
+            guard epoch == self.scanEpoch else {
+                self.refresh()
+                return
+            }
+            self.apply(result)
             self.lastRefresh = Date()
         }
     }
@@ -151,6 +169,34 @@ final class UsageStore: ObservableObject {
         runAlerts()
         runTips()
         persist()
+    }
+
+    /// React to a `settings` assignment. Always mirrors settings into the snapshot and persists.
+    /// When the change moves the resolved transcript root, the scanner is rebuilt and all
+    /// accumulated scan state + aggregates are cleared so the display reflects only the new
+    /// root (stale data from the old profile would otherwise linger until it aged out).
+    private func applySettingsChange(from oldValue: AlertSettings) {
+        snapshot.settings = settings
+
+        let oldRoot = ProjectsRoot.resolve(override: oldValue.projectsConfigDirOverride)
+        let newRoot = ProjectsRoot.resolve(override: settings.projectsConfigDirOverride)
+
+        guard oldRoot != newRoot else {
+            persist()
+            return
+        }
+
+        AppLog.shared.info("transcript root changed \(oldRoot.path) → \(newRoot.path): clearing scan state and re-scanning", category: "scan")
+        // Bump the epoch so any in-flight old-root scan's result is discarded rather than folded
+        // back into the cleared snapshot.
+        scanEpoch += 1
+        scanner = TranscriptScanner(rootDirectory: newRoot)
+        snapshot.scanState = ScanState()
+        snapshot.aggregates = [:]
+        snapshot.todayConcurrency = ConcurrencyStats()
+        rebuildPublished()
+        persist()
+        refresh()
     }
 
     /// Reload pricing.json from disk and recompute all costs.

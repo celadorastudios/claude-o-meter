@@ -12,6 +12,7 @@ struct PopoverView: View {
     @State private var launchAtLogin = false
     @State private var loginItemNeedsApproval = false
     @State private var showTrendTooltip = false
+    @State private var showRootChangeConfirm = false
 
     var body: some View {
         Group {
@@ -131,7 +132,7 @@ struct PopoverView: View {
             .frame(maxHeight: 260)
 
             if hasUnknown {
-                Text("Unknown* models are priced with the fallback rate — add their exact key to pricing.json.")
+                Text("Unknown* models use the fallback rate. Add their exact key to pricing.json to price them correctly.")
                     .font(.system(size: 11)).foregroundStyle(.tertiary)
             }
 
@@ -228,8 +229,9 @@ struct PopoverView: View {
                 .foregroundStyle(.orange)
             }
 
-            Text("Fires when spend hits the alert (once/day or once/month) and again when approaching it. Leave blank to disable. USD.")
+            Text("Fires once per period, again when approaching. Blank to disable. USD.")
                 .font(.system(size: 11)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
 
             Divider()
 
@@ -245,6 +247,11 @@ struct PopoverView: View {
             }
             Text("Set discountPercent in pricing.json for enterprise discounts, then Reload.")
                 .font(.system(size: 11)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Divider()
+
+            transcriptSourceSection
 
             Divider()
 
@@ -259,9 +266,6 @@ struct PopoverView: View {
             }
             .font(.system(size: 11))
 
-            Text("Copies the in-memory log to your clipboard. Useful when filing a bug report.")
-                .font(.system(size: 11)).foregroundStyle(.secondary)
-
             Spacer()
 
             Divider()
@@ -274,16 +278,100 @@ struct PopoverView: View {
 
                 Spacer()
 
-                Button("Save") {
-                    store.settings = draftSettings
-                    showSettings = false
-                }
+                Button("Save") { attemptSave() }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.return, modifiers: [])
             }
             .font(.system(size: 12))
         }
         .padding(12)
+        .confirmationDialog(
+            "Change transcript source?",
+            isPresented: $showRootChangeConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Change & Clear History", role: .destructive) { commitSettings() }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("This clears the usage history shown here and re-scans from the new location. Your alert thresholds and pricing rates are kept.")
+        }
+    }
+
+    /// Commit draft settings, prompting first only when the change would move the transcript
+    /// root (which clears accumulated history). Unchanged root saves immediately.
+    private func attemptSave() {
+        let currentRoot = ProjectsRoot.resolve(override: store.settings.projectsConfigDirOverride)
+        let draftRoot   = ProjectsRoot.resolve(override: draftSettings.projectsConfigDirOverride)
+        if currentRoot != draftRoot {
+            showRootChangeConfirm = true
+        } else {
+            commitSettings()
+        }
+    }
+
+    private func commitSettings() {
+        store.settings = draftSettings
+        showSettings = false
+    }
+
+    /// Present a native folder picker for the Claude config directory. The chosen path is stored
+    /// verbatim; `ProjectsRoot.resolve` appends `projects/` and the "Now scanning" line reflects it.
+    private func browseForConfigDir() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Select"
+        panel.message = "Choose your Claude config directory (the folder containing projects/)."
+        if let current = draftSettings.projectsConfigDirOverride, !current.isEmpty {
+            panel.directoryURL = URL(fileURLWithPath: (current as NSString).expandingTildeInPath)
+        }
+        if panel.runModal() == .OK, let url = panel.url {
+            draftSettings.projectsConfigDirOverride = url.path
+        }
+    }
+
+    private var transcriptSourceSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Transcript Source")
+                .font(.system(size: 12, weight: .semibold))
+
+            HStack(spacing: 6) {
+                TextField(
+                    "~/.claude",
+                    text: Binding(
+                        get: { draftSettings.projectsConfigDirOverride ?? "" },
+                        set: { draftSettings.projectsConfigDirOverride = $0.isEmpty ? nil : $0 }
+                    )
+                )
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 11))
+
+                Button("Browse…") { browseForConfigDir() }
+                    .font(.system(size: 11))
+                    .controlSize(.small)
+            }
+
+            HStack {
+                Text("Now scanning: \(store.resolvedRootPath)")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer()
+                if draftSettings.projectsConfigDirOverride != nil {
+                    Button("Reset") { draftSettings.projectsConfigDirOverride = nil }
+                        .font(.system(size: 10))
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Color.accentColor)
+                }
+            }
+
+            Text("Claude config dir to scan. Blank uses CLAUDE_CONFIG_DIR, else ~/.claude. Changing this clears history.")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     // MARK: - About panel
@@ -313,7 +401,7 @@ struct PopoverView: View {
                 }
             }
 
-            Text("Real-time Claude Code spend tracker. Reads ~/.claude/projects/**/*.jsonl locally — nothing leaves your machine.")
+            Text("Real-time Claude Code spend tracker. Reads transcripts locally. Nothing leaves your machine.")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -416,7 +504,7 @@ struct PopoverView: View {
                 }
                 .font(.system(size: 11))
 
-                Text("Includes app version and session activity — no personal data.")
+                Text("Includes app version and session activity. No personal data.")
                     .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -592,7 +680,7 @@ struct PopoverView: View {
     private func trendTooltip(_ trend: Double) -> String {
         let pct = String(format: "%.0f%%", abs(trend * 100))
         let direction = trend > 0 ? "up \(pct)" : "down \(pct)"
-        return "Spend is \(direction) — avg of last 7 days vs prior 7 days (today excluded)"
+        return "Spend is \(direction). Avg of last 7 days vs prior 7 days (today excluded)."
     }
 
     private func spendTrendBadge(_ trend: Double) -> some View {
