@@ -78,7 +78,7 @@ struct TranscriptScanner: Sendable {
             for var rec in batchByID.values {
                 guard state.seenIDs[rec.id] == nil else { continue }
                 state.seenIDs[rec.id] = rec.day
-                rec = UsageRecord(id: rec.id, day: rec.day, model: rec.model,
+                rec = UsageRecord(id: rec.id, day: rec.day, hour: rec.hour, model: rec.model,
                                   rawModel: rec.rawModel, usage: rec.usage, projectDir: projectDir)
                 records.append(rec)
             }
@@ -191,7 +191,8 @@ struct TranscriptScanner: Sendable {
         let rawModel = (message["model"] as? String) ?? "unknown"
         let family = ModelNormalizer.family(for: rawModel)
         let usage = parseUsage(usageDict)
-        return UsageRecord(id: id, day: day, model: family, rawModel: rawModel, usage: usage, projectDir: "")
+        let hour = DayBucket.date(fromISO: ts).map { Calendar.current.component(.hour, from: $0) } ?? 0
+        return UsageRecord(id: id, day: day, hour: hour, model: family, rawModel: rawModel, usage: usage, projectDir: "")
     }
 
     /// Derive a human-readable project name from an encoded Claude project directory name.
@@ -210,6 +211,60 @@ struct TranscriptScanner: Sendable {
             if !relative.isEmpty { return relative }
         }
         return withoutLeadingDash
+    }
+
+    /// Scan all JSONL files for a given local calendar day and return per-hour cost slices.
+    /// Reads only files whose modification date falls on or after the target day to skip
+    /// historical files quickly. Priced using the provided pricing table.
+    static func scanHourly(for day: String, rootDirectory: URL, pricing: PricingTable) -> [HourlySlice] {
+        var byHour: [Int: HourlySlice] = [:]
+        for h in 0..<24 { byHour[h] = HourlySlice(hour: h) }
+
+        let fm = FileManager.default
+        guard let dayStart = DayBucket.date(fromDay: day) else { return Array(byHour.values).sorted { $0.hour < $1.hour } }
+        guard let enumerator = fm.enumerator(
+            at: rootDirectory,
+            includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else { return Array(byHour.values).sorted { $0.hour < $1.hour } }
+
+        var seen = Set<String>()
+
+        for case let url as URL in enumerator {
+            guard url.pathExtension == "jsonl" else { continue }
+            let modDate = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+            if let mod = modDate, mod < dayStart { continue }
+
+            guard let handle = try? FileHandle(forReadingFrom: url) else { continue }
+            defer { try? handle.close() }
+            let data = handle.readDataToEndOfFile()
+
+            for lineData in data.split(separator: 0x0A, omittingEmptySubsequences: true) {
+                guard let obj = try? JSONSerialization.jsonObject(with: Data(lineData)) as? [String: Any],
+                      let msg = obj["message"] as? [String: Any],
+                      let usageDict = msg["usage"] as? [String: Any],
+                      let id = msg["id"] as? String,
+                      let ts = obj["timestamp"] as? String,
+                      let recordDay = DayBucket.localDay(fromISO: ts),
+                      recordDay == day,
+                      !seen.contains(id)
+                else { continue }
+
+                seen.insert(id)
+                let rawModel = (msg["model"] as? String) ?? "unknown"
+                let family = ModelNormalizer.family(for: rawModel)
+                let usage = parseUsage(usageDict)
+                let cost = pricing.cost(of: usage, family: family, rawModel: rawModel)
+                guard cost > 0 else { continue }
+
+                let date = DayBucket.date(fromISO: ts)
+                let hour = date.map { Calendar.current.component(.hour, from: $0) } ?? 0
+                byHour[hour]?.cost += cost
+                byHour[hour]?.perModel[family, default: 0] += cost
+            }
+        }
+
+        return Array(byHour.values).sorted { $0.hour < $1.hour }
     }
 
     static func parseUsage(_ u: [String: Any]) -> TokenUsage {

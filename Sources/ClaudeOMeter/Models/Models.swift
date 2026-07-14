@@ -25,10 +25,19 @@ struct TokenUsage: Codable, Sendable, Equatable {
 struct UsageRecord: Sendable, Equatable {
     let id: String          // message.id — global dedup key
     let day: String         // local calendar day, "yyyy-MM-dd"
+    let hour: Int           // 0-23, local time
     let model: String       // normalized family, e.g. "opus" / "sonnet" / "haiku"
     let rawModel: String    // original model string (for reference)
     let usage: TokenUsage
     let projectDir: String  // encoded directory name under ~/.claude/projects/
+}
+
+/// Cost breakdown for one hour of a single day. Computed on demand; never persisted.
+struct HourlySlice: Sendable, Identifiable {
+    let hour: Int           // 0-23
+    var cost: Double = 0
+    var perModel: [String: Double] = [:]
+    var id: Int { hour }
 }
 
 /// Per-model usage + computed cost within a single day.

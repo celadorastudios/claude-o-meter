@@ -9,6 +9,12 @@ struct PopoverView: View {
     @State private var draftSettings = AlertSettings()
     @State private var chartMode: HistoryChart.Mode = .daily
     @State private var viewingMonth: String = String(DayBucket.localDay(from: Date()).prefix(7))
+    // Hourly-mode state is accessed by the PopoverView+Hourly extension (separate file), so it
+    // is module-internal rather than file-private.
+    @State var viewingDay: String = DayBucket.localDay(from: Date())
+    @State var hourlySlices: [HourlySlice]?
+    @State var hourlyLoading = false
+    @State var hourlyLoadTask: Task<Void, Never>?
     @State private var launchAtLogin = false
     @State private var loginItemNeedsApproval = false
     @State private var showTrendTooltip = false
@@ -54,6 +60,15 @@ struct PopoverView: View {
                 viewingMonth = String(newKey.prefix(7))
             }
         }
+        .onChange(of: store.lastRefresh) { _, _ in
+            // The 60s background scan refreshes the store's aggregates (Daily/Monthly stay
+            // live), but the Hourly view's slices are recomputed on demand and would otherwise
+            // go stale. Reload them when a scan completes while viewing *today* in Hourly mode.
+            // Past days are immutable, so they never need a timed refresh.
+            if chartMode == .hourly, isToday {
+                loadHourlySlices(for: viewingDay, silent: true)
+            }
+        }
     }
 
     // MARK: - Main panel
@@ -72,11 +87,16 @@ struct PopoverView: View {
                 .onChange(of: chartMode) { _, newMode in
                     if newMode == .month {
                         viewingMonth = String(store.todayKey.prefix(7))
+                    } else if newMode == .hourly {
+                        viewingDay = store.todayKey
+                        loadHourlySlices(for: store.todayKey)
                     }
                 }
 
                 if chartMode == .month {
                     monthNavigator
+                } else if chartMode == .hourly {
+                    dayNavigator
                 } else {
                     Spacer()
                     if let trend = store.spendTrend {
@@ -100,15 +120,19 @@ struct PopoverView: View {
                 }
             }
             .zIndex(1)
-            HistoryChart(
-                days: store.days,
-                allAggregates: store.aggregates,
-                todayKey: store.todayKey,
-                mode: chartMode,
-                dailyLimit: store.settings.dailyThreshold,
-                monthlyLimit: store.settings.monthlyThreshold,
-                viewingMonth: viewingMonth
-            )
+            if chartMode == .hourly {
+                hourlyChartArea
+            } else {
+                HistoryChart(
+                    days: store.days,
+                    allAggregates: store.aggregates,
+                    todayKey: store.todayKey,
+                    mode: chartMode,
+                    dailyLimit: store.settings.dailyThreshold,
+                    monthlyLimit: store.settings.monthlyThreshold,
+                    viewingMonth: viewingMonth
+                )
+            }
 
             projectsCard
             if !store.tips.isEmpty {
@@ -630,6 +654,8 @@ struct PopoverView: View {
         guard let date = Calendar.current.date(from: comps) else { return viewingMonth }
         return Self.monthFormatter.string(from: date)
     }
+
+    // MARK: - Month navigation
 
     private var monthNavigator: some View {
         HStack(spacing: 4) {

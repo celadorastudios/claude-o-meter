@@ -21,3 +21,7 @@ dist/
 
 # Claude Code local settings (machine-specific, may contain tool permissions)
 .claude/settings.local.json
+
+# Playwright MCP session artifacts + verification screenshots
+.playwright-mcp/
+verify-*.png

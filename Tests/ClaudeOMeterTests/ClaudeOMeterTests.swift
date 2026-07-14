@@ -304,9 +304,9 @@ final class ClaudeOMeterTests: XCTestCase {
 
     func testFoldAccumulatesPerModelAndDay() {
         var aggs: [String: DailyAggregate] = [:]
-        let r1 = UsageRecord(id: "a", day: "2026-06-20", model: "opus", rawModel: "claude-opus-4-8",
+        let r1 = UsageRecord(id: "a", day: "2026-06-20", hour: 0, model: "opus", rawModel: "claude-opus-4-8",
                              usage: TokenUsage(input: 1_000_000), projectDir: "")
-        let r2 = UsageRecord(id: "b", day: "2026-06-20", model: "opus", rawModel: "claude-opus-4-8",
+        let r2 = UsageRecord(id: "b", day: "2026-06-20", hour: 0, model: "opus", rawModel: "claude-opus-4-8",
                              usage: TokenUsage(output: 1_000_000), projectDir: "")
         Aggregator.fold(records: [r1, r2], into: &aggs, pricing: .default)
 
@@ -320,9 +320,9 @@ final class ClaudeOMeterTests: XCTestCase {
 
     func testFoldMultipleDays() {
         var aggs: [String: DailyAggregate] = [:]
-        let r1 = UsageRecord(id: "a", day: "2026-06-19", model: "sonnet", rawModel: "claude-sonnet-4-6",
+        let r1 = UsageRecord(id: "a", day: "2026-06-19", hour: 0, model: "sonnet", rawModel: "claude-sonnet-4-6",
                              usage: TokenUsage(input: 1_000_000), projectDir: "")
-        let r2 = UsageRecord(id: "b", day: "2026-06-20", model: "sonnet", rawModel: "claude-sonnet-4-6",
+        let r2 = UsageRecord(id: "b", day: "2026-06-20", hour: 0, model: "sonnet", rawModel: "claude-sonnet-4-6",
                              usage: TokenUsage(input: 1_000_000), projectDir: "")
         Aggregator.fold(records: [r1, r2], into: &aggs, pricing: .default)
         XCTAssertEqual(aggs.count, 2)
@@ -333,7 +333,7 @@ final class ClaudeOMeterTests: XCTestCase {
     func testFoldDeprecatedOpusUsesExactKeyRate() {
         // Verifies that aggregation correctly prices claude-opus-4-1 at $15/M, not $5/M.
         var aggs: [String: DailyAggregate] = [:]
-        let r = UsageRecord(id: "a", day: "2026-06-20", model: "opus", rawModel: "claude-opus-4-1",
+        let r = UsageRecord(id: "a", day: "2026-06-20", hour: 0, model: "opus", rawModel: "claude-opus-4-1",
                             usage: TokenUsage(input: 1_000_000), projectDir: "")
         Aggregator.fold(records: [r], into: &aggs, pricing: .default)
         XCTAssertEqual(aggs["2026-06-20"]?.totalCost ?? 0, 15.0, accuracy: 1e-9)
@@ -342,7 +342,7 @@ final class ClaudeOMeterTests: XCTestCase {
     func testFoldCurrentOpusUsesNewRate() {
         // Verifies claude-opus-4-8 is priced at $5/M (not the old incorrect $15/M).
         var aggs: [String: DailyAggregate] = [:]
-        let r = UsageRecord(id: "a", day: "2026-06-20", model: "opus", rawModel: "claude-opus-4-8",
+        let r = UsageRecord(id: "a", day: "2026-06-20", hour: 0, model: "opus", rawModel: "claude-opus-4-8",
                             usage: TokenUsage(input: 1_000_000), projectDir: "")
         Aggregator.fold(records: [r], into: &aggs, pricing: .default)
         XCTAssertEqual(aggs["2026-06-20"]?.totalCost ?? 0, 5.0, accuracy: 1e-9)
@@ -352,7 +352,7 @@ final class ClaudeOMeterTests: XCTestCase {
 
     func testTaxableCacheReadZeroBelowCap() {
         // ctx = 100k input + 50k cacheRead = 150k, under the 200k cap → no tax.
-        let r = UsageRecord(id: "a", day: "2026-06-20", model: "opus", rawModel: "claude-opus-4-8",
+        let r = UsageRecord(id: "a", day: "2026-06-20", hour: 0, model: "opus", rawModel: "claude-opus-4-8",
                             usage: TokenUsage(input: 100_000, cacheRead: 50_000), projectDir: "")
         XCTAssertEqual(Aggregator.taxableCacheRead(for: r), 0)
     }
@@ -360,13 +360,13 @@ final class ClaudeOMeterTests: XCTestCase {
     func testTaxableCacheReadAboveCap() {
         // ctx = 300k (all cacheRead). over = (300k-200k)/300k = 1/3.
         // taxable = round(300k × 1/3) = 100_000.
-        let r = UsageRecord(id: "a", day: "2026-06-20", model: "opus", rawModel: "claude-opus-4-8",
+        let r = UsageRecord(id: "a", day: "2026-06-20", hour: 0, model: "opus", rawModel: "claude-opus-4-8",
                             usage: TokenUsage(cacheRead: 300_000), projectDir: "")
         XCTAssertEqual(Aggregator.taxableCacheRead(for: r), 100_000)
     }
 
     func testTaxableCacheReadZeroForSynthetic() {
-        let r = UsageRecord(id: "a", day: "2026-06-20", model: ModelNormalizer.syntheticFamily,
+        let r = UsageRecord(id: "a", day: "2026-06-20", hour: 0, model: ModelNormalizer.syntheticFamily,
                             rawModel: "<synthetic>",
                             usage: TokenUsage(cacheRead: 300_000), projectDir: "")
         XCTAssertEqual(Aggregator.taxableCacheRead(for: r), 0)
@@ -374,7 +374,7 @@ final class ClaudeOMeterTests: XCTestCase {
 
     func testTaxableCacheReadZeroWithNoCacheRead() {
         // Above the cap on input alone, but no cache-read to tax.
-        let r = UsageRecord(id: "a", day: "2026-06-20", model: "opus", rawModel: "claude-opus-4-8",
+        let r = UsageRecord(id: "a", day: "2026-06-20", hour: 0, model: "opus", rawModel: "claude-opus-4-8",
                             usage: TokenUsage(input: 300_000), projectDir: "")
         XCTAssertEqual(Aggregator.taxableCacheRead(for: r), 0)
     }
@@ -382,11 +382,11 @@ final class ClaudeOMeterTests: XCTestCase {
     func testFoldAccumulatesTaxableCacheReadPerFamilyAndProject() {
         var aggs: [String: DailyAggregate] = [:]
         // Two above-cap opus turns in different projects; one below-cap turn adds nothing.
-        let r1 = UsageRecord(id: "a", day: "2026-06-20", model: "opus", rawModel: "claude-opus-4-8",
+        let r1 = UsageRecord(id: "a", day: "2026-06-20", hour: 0, model: "opus", rawModel: "claude-opus-4-8",
                              usage: TokenUsage(cacheRead: 300_000), projectDir: "proj-a")  // taxable 100k
-        let r2 = UsageRecord(id: "b", day: "2026-06-20", model: "opus", rawModel: "claude-opus-4-8",
+        let r2 = UsageRecord(id: "b", day: "2026-06-20", hour: 0, model: "opus", rawModel: "claude-opus-4-8",
                              usage: TokenUsage(cacheRead: 400_000), projectDir: "proj-b")  // over=1/2 → 200k
-        let r3 = UsageRecord(id: "c", day: "2026-06-20", model: "opus", rawModel: "claude-opus-4-8",
+        let r3 = UsageRecord(id: "c", day: "2026-06-20", hour: 0, model: "opus", rawModel: "claude-opus-4-8",
                              usage: TokenUsage(cacheRead: 50_000), projectDir: "proj-a")   // below cap → 0
         Aggregator.fold(records: [r1, r2, r3], into: &aggs, pricing: .default)
 
@@ -458,7 +458,7 @@ final class ClaudeOMeterTests: XCTestCase {
             discountPercent: 0
         )
         var aggs: [String: DailyAggregate] = [:]
-        let r = UsageRecord(id: "a", day: "2026-06-20", model: "opus", rawModel: "claude-opus-4-8",
+        let r = UsageRecord(id: "a", day: "2026-06-20", hour: 0, model: "opus", rawModel: "claude-opus-4-8",
                             usage: TokenUsage(input: 1_000_000), projectDir: "")
         Aggregator.fold(records: [r], into: &aggs, pricing: pricing)
         XCTAssertEqual(aggs["2026-06-20"]?.perModel["opus"]?.cost ?? 0, 10.0, accuracy: 1e-9)
@@ -635,9 +635,9 @@ final class ClaudeOMeterTests: XCTestCase {
         // H1 fix: when two records of the same family arrive on the same day with
         // different rawModels, the stored rawModel must be the most recently seen one.
         var aggs: [String: DailyAggregate] = [:]
-        let r1 = UsageRecord(id: "a", day: "2026-06-20", model: "opus", rawModel: "claude-opus-4-1",
+        let r1 = UsageRecord(id: "a", day: "2026-06-20", hour: 0, model: "opus", rawModel: "claude-opus-4-1",
                              usage: TokenUsage(input: 1_000), projectDir: "")
-        let r2 = UsageRecord(id: "b", day: "2026-06-20", model: "opus", rawModel: "claude-opus-4-8",
+        let r2 = UsageRecord(id: "b", day: "2026-06-20", hour: 0, model: "opus", rawModel: "claude-opus-4-8",
                              usage: TokenUsage(input: 1_000), projectDir: "")
         Aggregator.fold(records: [r1, r2], into: &aggs, pricing: .default)
         XCTAssertEqual(aggs["2026-06-20"]?.perModel["opus"]?.rawModel, "claude-opus-4-8",

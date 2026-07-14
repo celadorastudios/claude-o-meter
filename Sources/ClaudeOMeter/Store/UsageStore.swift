@@ -256,6 +256,15 @@ final class UsageStore: ObservableObject {
             .sorted { $0.cost > $1.cost }
     }
 
+    /// Return per-hour cost slices for `day` by scanning the transcript archive off-actor.
+    func hourlySlices(for day: String) async -> [HourlySlice] {
+        let root = scanner.rootDirectory
+        let p = pricing
+        return await Task.detached(priority: .utility) {
+            TranscriptScanner.scanHourly(for: day, rootDirectory: root, pricing: p)
+        }.value
+    }
+
     func installUpdate() {
         guard let update = availableUpdate, !isInstalling else { return }
         guard let downloadURL = update.downloadURL else {

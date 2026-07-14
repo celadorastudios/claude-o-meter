@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// One day in the history list; expands to show per-model token/cost breakdown.
+/// One day in the history list; expands to show per-model breakdown.
 struct DayRow: View {
     let day: DailyAggregate
+
     @State private var expanded = false
 
     var body: some View {

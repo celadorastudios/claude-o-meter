@@ -267,7 +267,7 @@ final class PatternDetectorTests: XCTestCase {
         for i in 1...7 {
             let day = DayBucket.day(daysAgo: i, from: now)
             let rec = UsageRecord(
-                id: "msg-\(i)", day: day, model: "opus", rawModel: "claude-opus-4-8",
+                id: "msg-\(i)", day: day, hour: 0, model: "opus", rawModel: "claude-opus-4-8",
                 usage: TokenUsage(cacheRead: 2_000_000), projectDir: projectDir
             )
             Aggregator.fold(records: [rec], into: &aggs, pricing: .default)

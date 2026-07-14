@@ -3,6 +3,7 @@ import Charts
 
 struct HistoryChart: View {
     enum Mode: String, CaseIterable, Identifiable {
+        case hourly = "Hourly"
         case daily = "Daily"
         case month = "Monthly"
         var id: String { rawValue }
@@ -146,18 +147,25 @@ struct HistoryChart: View {
         }.points
     }
 
-    private var yMax: Double {
-        let dataMax: Double
+    /// The tallest point the data reaches: the projected/actual cumulative total in Monthly
+    /// mode, or the highest single day's bar in Daily mode. Decides which side of the limit
+    /// line is clear for its label.
+    private var dataMax: Double {
         if mode == .month {
             let top = projectionCumulativePoints.last?.value
                 ?? monthCumulativePoints.last?.value
                 ?? 1.0
-            dataMax = max(top, 1.0)
-        } else {
-            dataMax = ordered.map { $0.totalCost }.max() ?? 1.0
+            return max(top, 1.0)
         }
-        let limitMax = activeLimit ?? 0
-        return max(dataMax, limitMax) * 1.1
+        return ordered.map { $0.totalCost }.max() ?? 1.0
+    }
+
+    private var yMax: Double {
+        ChartScaling.yMax(dataMax: dataMax, limit: activeLimit, floor: 1.0)
+    }
+
+    private var alertAnnotationPosition: AnnotationPosition {
+        ChartScaling.alertAnnotationPosition(dataMax: dataMax, limit: activeLimit)
     }
 
     private var labelDays: [String] {
@@ -301,7 +309,7 @@ struct HistoryChart: View {
                     RuleMark(y: .value("Limit", limit))
                         .foregroundStyle(Color.red.opacity(0.85))
                         .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
-                        .annotation(position: .top, alignment: .leading, spacing: 2) {
+                        .annotation(position: alertAnnotationPosition, alignment: .leading, spacing: 2) {
                             Text("\(mode == .daily ? "Daily" : "Monthly") alert · \(Fmt.usd(limit))")
                                 .font(.system(size: 11, weight: .semibold))
                                 .foregroundStyle(.white)
