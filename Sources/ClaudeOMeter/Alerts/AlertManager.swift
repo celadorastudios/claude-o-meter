@@ -64,6 +64,7 @@ final class AlertManager {
     nonisolated static func decide(
         todayCost: Double,
         monthCost: Double,
+        projectDailyCosts: [String: Double] = [:],
         settings: AlertSettings,
         lastAlertDay: [String: String],
         today: String
@@ -108,6 +109,18 @@ final class AlertManager {
             }
         }
 
+        // Per-project daily alerts
+        for (name, limit) in settings.projectThresholds where limit > 0 {
+            let cost = projectDailyCosts[name] ?? 0
+            let key = "project:\(name)"
+            if cost >= limit, fired[key] != today {
+                pending.append(AlertNotification(
+                    title: "Project budget reached",
+                    body: "\(name): \(Fmt.usd(cost)) today (alert at \(Fmt.usd(limit)))"))
+                fired[key] = today
+            }
+        }
+
         return AlertDecision(notifications: pending, lastAlertDay: fired)
     }
 
@@ -115,12 +128,14 @@ final class AlertManager {
     func evaluate(
         todayCost: Double,
         monthCost: Double,
+        projectDailyCosts: [String: Double] = [:],
         settings: AlertSettings,
         lastAlertDay: [String: String],
         today: String
     ) -> [String: String] {
         let decision = Self.decide(
             todayCost: todayCost, monthCost: monthCost,
+            projectDailyCosts: projectDailyCosts,
             settings: settings, lastAlertDay: lastAlertDay, today: today)
         for n in decision.notifications { notify(title: n.title, body: n.body) }
         return decision.lastAlertDay

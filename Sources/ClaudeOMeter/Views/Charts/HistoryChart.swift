@@ -3,19 +3,21 @@ import Charts
 
 struct HistoryChart: View {
     enum Mode: String, CaseIterable, Identifiable {
-        case hourly = "Hourly"
-        case daily = "Daily"
-        case month = "Monthly"
+        case hourly = "1H"
+        case daily = "Day"
+        case weekly = "Wk"
+        case month = "Mo"
         var id: String { rawValue }
     }
 
     let days: [DailyAggregate]                  // 30-day window, newest first (Daily mode)
-    let allAggregates: [String: DailyAggregate] // full store history (Monthly mode)
+    let allAggregates: [String: DailyAggregate] // full store history (Monthly/Weekly mode)
     let todayKey: String
     let mode: Mode
     let dailyLimit: Double?
     let monthlyLimit: Double?
     let viewingMonth: String                     // "YYYY-MM"
+    var viewingWeekMonday: String = ""           // "yyyy-MM-dd" of the Monday (Weekly mode)
 
     @State private var selectedDay: String?
     @State private var hoverX: CGFloat?
@@ -57,11 +59,13 @@ struct HistoryChart: View {
         let source: [(String, DailyAggregate)]
         if mode == .daily {
             source = ordered.map { ($0.day, $0) }
+        } else if mode == .weekly {
+            source = weekBucketDays.compactMap { day in allAggregates[day].map { (day, $0) } }
         } else {
             source = currentMonthDays.compactMap { day in allAggregates[day].map { (day, $0) } }
         }
         let all = Set(source.flatMap { $0.1.perModel.values.filter { $0.cost > 0 }.map { $0.model } })
-        let preferred = ["haiku", "sonnet", "opus", "synthetic", "unknown"]
+        let preferred = ["haiku", "sonnet", "opus", "fable", "synthetic", "unknown"]
         let inOrder = preferred.filter { all.contains($0) }
         let rest = all.subtracting(preferred).sorted()
         return inOrder + rest
@@ -113,6 +117,66 @@ struct HistoryChart: View {
         }
     }
 
+    // MARK: - Weekly mode
+
+    /// 4 weeks ending with the week containing `viewingWeekMonday`, oldest first.
+    private var weekBuckets: [(label: String, monday: String, days: [String])] {
+        guard !viewingWeekMonday.isEmpty else { return [] }
+        guard let baseDate = DayBucket.date(fromDay: viewingWeekMonday) else { return [] }
+        return (0..<4).reversed().map { weeksAgo in
+            let monday = DayBucket.weekMonday(weeksAgo: weeksAgo, from: baseDate)
+            let days = DayBucket.daysInWeek(startingMonday: monday)
+            let label = DayBucket.weekRangeLabel(startingMonday: monday)
+            return (label: label, monday: monday, days: days)
+        }
+    }
+
+    /// All individual days across the 4 displayed weeks.
+    private var weekBucketDays: [String] {
+        weekBuckets.flatMap { $0.days }
+    }
+
+    /// Week labels used as the categorical X domain.
+    private var weekLabels: [String] {
+        weekBuckets.map { $0.label }
+    }
+
+    /// Whether the viewed week contains today.
+    private var isCurrentWeek: Bool {
+        viewingWeekMonday == DayBucket.weekMonday()
+    }
+
+    /// Stacked bar data for weekly view: one bar per week, stacked by model.
+    private var weeklyStackedPoints: [StackPoint] {
+        let models = allKnownModels
+        guard !models.isEmpty else { return [] }
+        return weekBuckets.flatMap { bucket in
+            models.map { model in
+                let cost = bucket.days.reduce(0.0) { sum, day in
+                    let dayCost = allAggregates[day]?.perModel[model]?.cost ?? 0
+                    // Only include past/today days for the current week
+                    if day > todayKey { return sum }
+                    return sum + dayCost
+                }
+                return StackPoint(day: bucket.label, model: model, cost: max(cost, 0.0001))
+            }
+        }
+    }
+
+    /// Projection ghost bar for the current week (remaining days).
+    private var weeklyProjectionBars: [ProjectionBar] {
+        guard isCurrentWeek else { return [] }
+        let currentBucket = weekBuckets.last
+        guard let bucket = currentBucket else { return [] }
+        let futureDays = bucket.days.filter { $0 > todayKey }
+        guard !futureDays.isEmpty else { return [] }
+        let forecasts = SpendProjector.forecast(
+            aggregates: allAggregates, futureDays: futureDays, todayKey: todayKey)
+        let total = forecasts.reduce(0.0) { $0 + $1.cost }
+        guard total > 0 else { return [] }
+        return [ProjectionBar(day: bucket.label, cost: total)]
+    }
+
     /// Per-day forecasts for future days in the current month (empty for past months).
     private var spendForecasts: [SpendProjector.DayForecast] {
         guard isCurrentMonth else { return [] }
@@ -157,6 +221,12 @@ struct HistoryChart: View {
                 ?? 1.0
             return max(top, 1.0)
         }
+        if mode == .weekly {
+            let barTotals = weekBuckets.map { bucket in
+                bucket.days.filter { $0 <= todayKey }.reduce(0.0) { $0 + (allAggregates[$1]?.totalCost ?? 0) }
+            }
+            return max(barTotals.max() ?? 1.0, 1.0)
+        }
         return ordered.map { $0.totalCost }.max() ?? 1.0
     }
 
@@ -188,7 +258,13 @@ struct HistoryChart: View {
         return picks
     }
 
-    private var activeLimit: Double? { mode == .daily ? dailyLimit : monthlyLimit }
+    private var activeLimit: Double? {
+        switch mode {
+        case .daily: return dailyLimit
+        case .month: return monthlyLimit
+        case .weekly, .hourly: return nil
+        }
+    }
 
     // MARK: - Lookup helpers
 
@@ -273,6 +349,16 @@ struct HistoryChart: View {
                             .foregroundStyle(by: .value("Model", p.model))
                             .opacity(selectedDay == nil || selectedDay == p.day ? 1.0 : 0.3)
                     }
+                } else if mode == .weekly {
+                    ForEach(weeklyStackedPoints) { p in
+                        BarMark(x: .value("Week", p.day), y: .value("Cost", p.cost))
+                            .foregroundStyle(by: .value("Model", p.model))
+                            .opacity(selectedDay == nil || selectedDay == p.day ? 1.0 : 0.3)
+                    }
+                    ForEach(weeklyProjectionBars) { p in
+                        BarMark(x: .value("Week", p.day), y: .value("Cost", p.cost))
+                            .foregroundStyle(Color.secondary.opacity(0.22))
+                    }
                 } else {
                     // Actual daily bars (stacked by model)
                     ForEach(monthStackedPoints) { p in
@@ -329,7 +415,7 @@ struct HistoryChart: View {
                 domain: activeModels,
                 range: activeModels.map { ModelColor.color(for: $0) }
             )
-            .chartXScale(domain: mode == .month ? currentMonthDays : ordered.map { $0.day })
+            .chartXScale(domain: chartXDomain)
             .chartYScale(domain: 0...yMax)
             .chartLegend(.hidden)
             .chartXAxis {
@@ -337,6 +423,12 @@ struct HistoryChart: View {
                     AxisMarks(values: monthLabelDays) { value in
                         if let s = value.as(String.self) {
                             AxisValueLabel { Text(monthDayLabel(s)).font(.system(size: 11)) }
+                        }
+                    }
+                } else if mode == .weekly {
+                    AxisMarks(values: weekLabels) { value in
+                        if let s = value.as(String.self) {
+                            AxisValueLabel { Text(weekShortLabel(s)).font(.system(size: 10)) }
                         }
                     }
                 } else {
@@ -412,7 +504,7 @@ struct HistoryChart: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-                if mode == .month, !projectionBars.isEmpty {
+                if (mode == .month && !projectionBars.isEmpty) || (mode == .weekly && !weeklyProjectionBars.isEmpty) {
                     Spacer(minLength: 0)
                     HStack(spacing: 3) {
                         RoundedRectangle(cornerRadius: 1)
@@ -428,6 +520,15 @@ struct HistoryChart: View {
         }
     }
 
+    private var chartXDomain: [String] {
+        switch mode {
+        case .daily: return ordered.map { $0.day }
+        case .weekly: return weekLabels
+        case .month: return currentMonthDays
+        case .hourly: return ordered.map { $0.day }
+        }
+    }
+
     private func shortLabel(_ day: String) -> String {
         let parts = day.split(separator: "-")
         guard parts.count == 3 else { return day }
@@ -437,5 +538,11 @@ struct HistoryChart: View {
     private func monthDayLabel(_ day: String) -> String {
         guard let d = day.split(separator: "-").last.flatMap({ Int($0) }) else { return day }
         return "\(d)"
+    }
+
+    private func weekShortLabel(_ label: String) -> String {
+        // Labels are "Jun 30 – Jul 6"; show the start date portion only for axis
+        let parts = label.split(separator: "–")
+        return parts.first.map { String($0).trimmingCharacters(in: .whitespaces) } ?? label
     }
 }

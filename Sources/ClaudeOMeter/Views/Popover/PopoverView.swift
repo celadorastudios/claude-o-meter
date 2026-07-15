@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 struct PopoverView: View {
     @EnvironmentObject var store: UsageStore
@@ -12,6 +13,7 @@ struct PopoverView: View {
     // Hourly-mode state is accessed by the PopoverView+Hourly extension (separate file), so it
     // is module-internal rather than file-private.
     @State var viewingDay: String = DayBucket.localDay(from: Date())
+    @State private var viewingWeekMonday: String = DayBucket.weekMonday()
     @State var hourlySlices: [HourlySlice]?
     @State var hourlyLoading = false
     @State var hourlyLoadTask: Task<Void, Never>?
@@ -87,6 +89,8 @@ struct PopoverView: View {
                 .onChange(of: chartMode) { _, newMode in
                     if newMode == .month {
                         viewingMonth = String(store.todayKey.prefix(7))
+                    } else if newMode == .weekly {
+                        viewingWeekMonday = DayBucket.weekMonday()
                     } else if newMode == .hourly {
                         viewingDay = store.todayKey
                         loadHourlySlices(for: store.todayKey)
@@ -95,6 +99,8 @@ struct PopoverView: View {
 
                 if chartMode == .month {
                     monthNavigator
+                } else if chartMode == .weekly {
+                    weekNavigator
                 } else if chartMode == .hourly {
                     dayNavigator
                 } else {
@@ -130,7 +136,8 @@ struct PopoverView: View {
                     mode: chartMode,
                     dailyLimit: store.settings.dailyThreshold,
                     monthlyLimit: store.settings.monthlyThreshold,
-                    viewingMonth: viewingMonth
+                    viewingMonth: viewingMonth,
+                    viewingWeekMonday: viewingWeekMonday
                 )
             }
 
@@ -256,6 +263,10 @@ struct PopoverView: View {
             Text("Fires once per period, again when approaching. Blank to disable. USD.")
                 .font(.system(size: 11)).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+
+            Divider()
+
+            projectAlertsSection
 
             Divider()
 
@@ -395,6 +406,77 @@ struct PopoverView: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    // MARK: - Project alerts section
+
+    @State private var newProjectName = ""
+    @State private var newProjectLimit = ""
+
+    private var projectAlertsSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Project Alerts")
+                .font(.system(size: 12, weight: .semibold))
+
+            if draftSettings.projectThresholds.isEmpty {
+                Text("No per-project alerts configured.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(draftSettings.projectThresholds.sorted(by: { $0.key < $1.key }), id: \.key) { name, limit in
+                    HStack(spacing: 6) {
+                        Text(name)
+                            .font(.system(size: 11))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Text(Fmt.usd(limit))
+                            .font(.system(size: 11))
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                        Button {
+                            draftSettings.projectThresholds.removeValue(forKey: name)
+                        } label: {
+                            Image(systemName: "minus.circle.fill")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.red.opacity(0.7))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+
+            HStack(spacing: 4) {
+                TextField("Project name", text: $newProjectName)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 11))
+                    .frame(maxWidth: .infinity)
+                Text("$")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                TextField("limit", text: $newProjectLimit)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 11))
+                    .frame(width: 50)
+                Button("Add") {
+                    let name = newProjectName.trimmingCharacters(in: .whitespaces)
+                    let limit = Double(newProjectLimit.trimmingCharacters(in: .whitespaces))
+                    guard !name.isEmpty, let limit, limit > 0 else { return }
+                    draftSettings.projectThresholds[name] = limit
+                    newProjectName = ""
+                    newProjectLimit = ""
+                }
+                .font(.system(size: 11))
+                .controlSize(.small)
+            }
+
+            if !store.projectTotals.isEmpty {
+                Text("Known: \(store.projectTotals.prefix(3).map { $0.name }.joined(separator: ", "))")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
         }
     }
 
@@ -655,6 +737,65 @@ struct PopoverView: View {
         return Self.monthFormatter.string(from: date)
     }
 
+    // MARK: - Week navigation
+
+    private var availableWeeks: [String] {
+        var mondays = Set<String>()
+        for key in store.aggregates.keys {
+            if let d = DayBucket.date(fromDay: key) {
+                mondays.insert(DayBucket.weekMonday(from: d))
+            }
+        }
+        return mondays.sorted()
+    }
+
+    private var isCurrentWeekView: Bool {
+        viewingWeekMonday == DayBucket.weekMonday()
+    }
+
+    private var weekNavigator: some View {
+        HStack(spacing: 4) {
+            Spacer(minLength: 0)
+            Button {
+                if let idx = availableWeeks.firstIndex(of: viewingWeekMonday), idx > availableWeeks.startIndex {
+                    viewingWeekMonday = availableWeeks[availableWeeks.index(before: idx)]
+                }
+            } label: {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 10, weight: .semibold))
+            }
+            .buttonStyle(.plain)
+            .disabled(availableWeeks.first == viewingWeekMonday)
+
+            Text(DayBucket.weekRangeLabel(startingMonday: viewingWeekMonday))
+                .font(.system(size: 11, weight: .medium))
+                .frame(minWidth: 100, alignment: .center)
+
+            Button {
+                if let idx = availableWeeks.firstIndex(of: viewingWeekMonday) {
+                    let next = availableWeeks.index(after: idx)
+                    if next < availableWeeks.endIndex {
+                        viewingWeekMonday = availableWeeks[next]
+                    }
+                }
+            } label: {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+            }
+            .buttonStyle(.plain)
+            .disabled(availableWeeks.last == viewingWeekMonday)
+
+            if !isCurrentWeekView {
+                Button("Now") {
+                    viewingWeekMonday = DayBucket.weekMonday()
+                }
+                .font(.system(size: 10, weight: .semibold))
+                .buttonStyle(.borderedProminent)
+                .controlSize(.mini)
+            }
+        }
+    }
+
     // MARK: - Month navigation
 
     private var monthNavigator: some View {
@@ -723,6 +864,23 @@ struct PopoverView: View {
         .padding(.horizontal, 6)
         .padding(.vertical, 3)
         .background(RoundedRectangle(cornerRadius: 5).fill(color.opacity(0.12)))
+    }
+
+    private func runExport(format: ExportFormat) {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = format == .csv
+            ? [.commaSeparatedText]
+            : [.json]
+        panel.nameFieldStringValue = "claude-usage-\(store.todayKey).\(format.rawValue)"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let data: Data?
+        switch format {
+        case .csv:
+            data = UsageExporter.csvData(from: store.aggregates)
+        case .json:
+            data = try? UsageExporter.jsonData(from: store.aggregates)
+        }
+        try? data?.write(to: url, options: .atomic)
     }
 
     private var hasUnknown: Bool {
@@ -894,6 +1052,15 @@ struct PopoverView: View {
             Text(updatedLabel)
                 .font(.system(size: 11)).foregroundStyle(.secondary)
             Spacer()
+            Menu {
+                Button("Export CSV…") { runExport(format: .csv) }
+                Button("Export JSON…") { runExport(format: .json) }
+            } label: {
+                Image(systemName: "square.and.arrow.down").font(.system(size: 12))
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help("Export usage data…")
             Button {
                 NSWorkspace.shared.open(UpdateChecker.projectPageURL)
             } label: {
