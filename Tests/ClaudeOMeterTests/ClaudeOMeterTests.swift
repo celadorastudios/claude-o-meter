@@ -26,6 +26,12 @@ final class ClaudeOMeterTests: XCTestCase {
         XCTAssertEqual(ModelNormalizer.family(for: "claude-mythos-1-0"), "fable")
     }
 
+    func testNormalizationGPTModels() {
+        XCTAssertEqual(ModelNormalizer.family(for: "openai.gpt-5.6-luna"), "luna")
+        XCTAssertEqual(ModelNormalizer.family(for: "openai.gpt-5.6-terra"), "terra")
+        XCTAssertEqual(ModelNormalizer.family(for: "openai.gpt-5.6-sol"), "sol")
+    }
+
     func testNormalizationUnknownReturnsFallback() {
         XCTAssertEqual(ModelNormalizer.family(for: "some-future-model-xyz"), "unknown")
         XCTAssertEqual(ModelNormalizer.family(for: ""), "unknown")
@@ -121,6 +127,16 @@ final class ClaudeOMeterTests: XCTestCase {
                                cacheWrite5m: 1_000_000, cacheWrite1h: 1_000_000)
         // 10 + 50 + 1.0 + 12.5 + 20 = 93.5
         XCTAssertEqual(pricing.cost(of: usage, family: "fable", rawModel: "claude-fable-4-0"), 93.5, accuracy: 1e-9)
+    }
+
+    func testGPTRatesAndZeroCachePricing() {
+        let pricing = PricingTable.default
+        let usage = TokenUsage(input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000,
+                               cacheWrite5m: 1_000_000, cacheWrite1h: 1_000_000)
+
+        XCTAssertEqual(pricing.cost(of: usage, family: "luna", rawModel: "openai.gpt-5.6-luna"), 7.7, accuracy: 1e-9)
+        XCTAssertEqual(pricing.cost(of: usage, family: "terra", rawModel: "openai.gpt-5.6-terra"), 19.25, accuracy: 1e-9)
+        XCTAssertEqual(pricing.cost(of: usage, family: "sol", rawModel: "openai.gpt-5.6-sol"), 38.5, accuracy: 1e-9)
     }
 
     // MARK: - Pricing: exact-key override (deprecated claude-opus-4-1)

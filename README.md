@@ -73,7 +73,7 @@ swift test
 
 ## Pricing
 
-Default rates are Anthropic API list prices (USD / 1M tokens). On first launch, Claude-o-Meter writes an editable copy to:
+Default rates are Anthropic API list prices and GPT model-tier rates (USD / 1M tokens). On first launch, Claude-o-Meter writes an editable copy to:
 
 ```
 ~/Library/Application Support/ClaudeOMeter/pricing.json
@@ -89,6 +89,9 @@ Edit that file and click **Settings → Reload pricing** to apply changes withou
 | opus   | $5    | $25   | $0.50      | $6.25            | $10.00           |
 | sonnet | $3    | $15   | $0.30      | $3.75            | $6.00            |
 | haiku  | $1    | $5    | $0.10      | $1.25            | $2.00            |
+| luna   | $1.10 | $6.60 | $0          | $0               | $0               |
+| terra  | $2.75 | $16.50 | $0         | $0               | $0               |
+| sol    | $5.50 | $33.00 | $0         | $0               | $0               |
 
 `claude-opus-4-1` (deprecated model) keeps its legacy $15/$75 rate via an exact-key override.
 
@@ -110,7 +113,7 @@ TranscriptScanner  →  Aggregator  →  UsageStore  →  SwiftUI Views
 1. **Incremental scan** — per-file byte cursors mean only newly appended bytes are parsed on each 60s refresh. Thousands of transcript files don't get re-read on every tick.
 2. **Dedup by `message.id`** — Claude Code copies transcript lines into resumed and compacted sessions. The same API response can appear in multiple files; each `message.id` is counted exactly once (last occurrence per scan batch wins, so streamed responses always use their final complete token count).
 3. **Local day bucketing** — UTC timestamps are converted to local calendar day so spending aligns with your actual workday.
-4. **Model normalisation** — raw model strings (`bedrock/us.anthropic.claude-sonnet-4-6`, etc.) are mapped to a family (`opus`/`sonnet`/`haiku`/`fable`). `<synthetic>` messages cost $0.
+4. **Model normalisation** — raw model strings (`bedrock/us.anthropic.claude-sonnet-4-6`, `openai.gpt-5.6-terra`, etc.) are mapped to a family (`opus`/`sonnet`/`haiku`/`fable`/`luna`/`terra`/`sol`). `<synthetic>` messages cost $0.
 5. **State persistence** — scan cursors, seen IDs, aggregates, and settings live in `~/Library/Application Support/ClaudeOMeter/`. Upgrading from an older version migrates state automatically so history and alert settings are preserved.
 
 ---

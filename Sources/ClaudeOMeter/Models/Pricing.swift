@@ -34,12 +34,15 @@ struct PricingTable: Codable, Sendable, Equatable {
             "opus":   ModelPrice(input: 5,   output: 25, cacheRead: 0.50, cacheWrite5m: 6.25,  cacheWrite1h: 10),
             "sonnet": ModelPrice(input: 3,   output: 15, cacheRead: 0.30, cacheWrite5m: 3.75,  cacheWrite1h: 6),
             "haiku":  ModelPrice(input: 1,   output: 5,  cacheRead: 0.10, cacheWrite5m: 1.25,  cacheWrite1h: 2),
+            "luna":   ModelPrice(input: 1.1, output: 6.6, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0),
+            "terra":  ModelPrice(input: 2.75, output: 16.5, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0),
+            "sol":    ModelPrice(input: 5.5, output: 33, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0),
             // Exact-key overrides for deprecated / differently-priced model versions.
             "claude-opus-4-1": ModelPrice(input: 15, output: 75, cacheRead: 1.50, cacheWrite5m: 18.75, cacheWrite1h: 30),
         ],
         fallback: ModelPrice(input: 5, output: 25, cacheRead: 0.50, cacheWrite5m: 6.25, cacheWrite1h: 10),
         discountPercent: 0,
-        version: 2
+        version: 3
     )
 
     func price(forFamily family: String, rawModel: String) -> ModelPrice? {
@@ -73,6 +76,9 @@ enum ModelNormalizer {
         if m.contains("opus") { return "opus" }
         if m.contains("sonnet") { return "sonnet" }
         if m.contains("haiku") { return "haiku" }
+        if m.contains("luna") { return "luna" }
+        if m.contains("terra") { return "terra" }
+        if m.contains("sol") { return "sol" }
         return "unknown"
     }
 }
