@@ -260,6 +260,10 @@ struct PopoverView: View {
 
             Divider()
 
+            projectAlertsSection
+
+            Divider()
+
             Text("Pricing")
                 .font(.system(size: 12, weight: .semibold))
 
@@ -396,6 +400,77 @@ struct PopoverView: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    // MARK: - Project alerts section
+
+    @State private var newProjectName = ""
+    @State private var newProjectLimit = ""
+
+    private var projectAlertsSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Project Alerts")
+                .font(.system(size: 12, weight: .semibold))
+
+            if draftSettings.projectThresholds.isEmpty {
+                Text("No per-project alerts configured.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(draftSettings.projectThresholds.sorted(by: { $0.key < $1.key }), id: \.key) { name, limit in
+                    HStack(spacing: 6) {
+                        Text(name)
+                            .font(.system(size: 11))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Text(Fmt.usd(limit))
+                            .font(.system(size: 11))
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                        Button {
+                            draftSettings.projectThresholds.removeValue(forKey: name)
+                        } label: {
+                            Image(systemName: "minus.circle.fill")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.red.opacity(0.7))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+
+            HStack(spacing: 4) {
+                TextField("Project name", text: $newProjectName)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 11))
+                    .frame(maxWidth: .infinity)
+                Text("$")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                TextField("limit", text: $newProjectLimit)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 11))
+                    .frame(width: 50)
+                Button("Add") {
+                    let name = newProjectName.trimmingCharacters(in: .whitespaces)
+                    let limit = Double(newProjectLimit.trimmingCharacters(in: .whitespaces))
+                    guard !name.isEmpty, let limit, limit > 0 else { return }
+                    draftSettings.projectThresholds[name] = limit
+                    newProjectName = ""
+                    newProjectLimit = ""
+                }
+                .font(.system(size: 11))
+                .controlSize(.small)
+            }
+
+            if !store.projectTotals.isEmpty {
+                Text("Known: \(store.projectTotals.prefix(3).map { $0.name }.joined(separator: ", "))")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
         }
     }
 

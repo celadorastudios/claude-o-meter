@@ -89,6 +89,8 @@ final class UsageStore: ObservableObject {
 
     var todayCostString: String { Fmt.usd(todayCost) }
 
+    var monthCostString: String { Fmt.usd(monthCost) }
+
     /// Red when over the daily budget, default otherwise.
     var isOverDailyBudget: Bool {
         guard let limit = settings.dailyThreshold else { return false }
@@ -227,9 +229,17 @@ final class UsageStore: ObservableObject {
     }
 
     private func runAlerts() {
+        var projectDailyCosts: [String: Double] = [:]
+        if let todayAgg = snapshot.aggregates[todayKey] {
+            for (dir, pu) in todayAgg.perProject {
+                let name = TranscriptScanner.projectDisplayName(from: dir)
+                projectDailyCosts[name, default: 0] += pu.cost
+            }
+        }
         let fired = AlertManager.shared.evaluate(
             todayCost: todayCost,
             monthCost: monthCost,
+            projectDailyCosts: projectDailyCosts,
             settings: settings,
             lastAlertDay: snapshot.lastAlertDay,
             today: todayKey
