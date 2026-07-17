@@ -12,11 +12,11 @@ struct ClaudeOMeterApp: App {
             PopoverView()
                 .environmentObject(store)
         } label: {
-            // Collapsed menu-bar content. MenuBarExtra labels reliably render only
-            // SF Symbols + Text, so use a symbol here (the drawn mark lives in the popover).
             BundleImage(name: "claude-code-icon", size: 14, template: true, fallback: "sparkles")
             Text(store.todayCostString)
                 .foregroundStyle(store.isOverDailyBudget ? Color.red : Color.primary)
+            Text("· \(store.monthCostString) MTD")
+                .foregroundStyle(Color.primary)
         }
         .menuBarExtraStyle(.window)
     }
@@ -28,9 +28,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
         AppLog.shared.info("Claude-o-Meter \(version) launched on macOS \(ProcessInfo.processInfo.operatingSystemVersionString)", category: "app")
         NSApp.setActivationPolicy(.accessory)
-        if Bundle.main.bundleIdentifier != nil {
+        if Bundle.main.infoDictionary?["CFBundleIdentifier"] != nil {
             UNUserNotificationCenter.current().delegate = self
             AlertManager.shared.requestAuthorization()
+        } else {
+            AppLog.shared.info("skipping notification setup (no bundle proxy — swift run?)", category: "app")
         }
     }
 

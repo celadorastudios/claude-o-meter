@@ -102,6 +102,8 @@ final class UsageStore: ObservableObject {
             .reduce(0) { $0 + $1.totalCost }
     }
 
+    var monthCostString: String { Fmt.usd(monthCost) }
+
     var windowTotalCost: Double { days.reduce(0) { $0 + $1.totalCost } }
 
     /// Fractional change in average daily spend: last 7 complete days vs prior 7.
