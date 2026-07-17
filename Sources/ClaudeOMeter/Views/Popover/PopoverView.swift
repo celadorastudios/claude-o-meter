@@ -13,6 +13,7 @@ struct PopoverView: View {
     // Hourly-mode state is accessed by the PopoverView+Hourly extension (separate file), so it
     // is module-internal rather than file-private.
     @State var viewingDay: String = DayBucket.localDay(from: Date())
+    @State private var viewingWeekMonday: String = DayBucket.weekMonday()
     @State var hourlySlices: [HourlySlice]?
     @State var hourlyLoading = false
     @State var hourlyLoadTask: Task<Void, Never>?
@@ -91,6 +92,8 @@ struct PopoverView: View {
                     } else if newMode == .hourly {
                         viewingDay = store.todayKey
                         loadHourlySlices(for: store.todayKey)
+                    } else if newMode == .weekly {
+                        viewingWeekMonday = DayBucket.weekMonday()
                     }
                 }
 
@@ -98,6 +101,8 @@ struct PopoverView: View {
                     monthNavigator
                 } else if chartMode == .hourly {
                     dayNavigator
+                } else if chartMode == .weekly {
+                    weekNavigator
                 } else {
                     Spacer()
                     if let trend = store.spendTrend {
@@ -131,7 +136,8 @@ struct PopoverView: View {
                     mode: chartMode,
                     dailyLimit: store.settings.dailyThreshold,
                     monthlyLimit: store.settings.monthlyThreshold,
-                    viewingMonth: viewingMonth
+                    viewingMonth: viewingMonth,
+                    viewingWeekMonday: viewingWeekMonday
                 )
             }
 
@@ -696,6 +702,65 @@ struct PopoverView: View {
             if !isCurrentMonth {
                 Button("Now") {
                     viewingMonth = String(store.todayKey.prefix(7))
+                }
+                .font(.system(size: 10, weight: .semibold))
+                .buttonStyle(.borderedProminent)
+                .controlSize(.mini)
+            }
+        }
+    }
+
+    // MARK: - Week navigation
+
+    private var availableWeeks: [String] {
+        var mondays = Set<String>()
+        for key in store.aggregates.keys {
+            if let d = DayBucket.date(fromDay: key) {
+                mondays.insert(DayBucket.weekMonday(from: d))
+            }
+        }
+        return mondays.sorted()
+    }
+
+    private var isCurrentWeekView: Bool {
+        viewingWeekMonday == DayBucket.weekMonday()
+    }
+
+    private var weekNavigator: some View {
+        HStack(spacing: 4) {
+            Spacer(minLength: 0)
+            Button {
+                if let idx = availableWeeks.firstIndex(of: viewingWeekMonday), idx > availableWeeks.startIndex {
+                    viewingWeekMonday = availableWeeks[availableWeeks.index(before: idx)]
+                }
+            } label: {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 10, weight: .semibold))
+            }
+            .buttonStyle(.plain)
+            .disabled(availableWeeks.first == viewingWeekMonday)
+
+            Text(DayBucket.weekRangeLabel(startingMonday: viewingWeekMonday))
+                .font(.system(size: 11, weight: .medium))
+                .frame(minWidth: 100, alignment: .center)
+
+            Button {
+                if let idx = availableWeeks.firstIndex(of: viewingWeekMonday) {
+                    let next = availableWeeks.index(after: idx)
+                    if next < availableWeeks.endIndex {
+                        viewingWeekMonday = availableWeeks[next]
+                    }
+                }
+            } label: {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+            }
+            .buttonStyle(.plain)
+            .disabled(availableWeeks.last == viewingWeekMonday)
+
+            if !isCurrentWeekView {
+                Button("Now") {
+                    viewingWeekMonday = DayBucket.weekMonday()
                 }
                 .font(.system(size: 10, weight: .semibold))
                 .buttonStyle(.borderedProminent)
