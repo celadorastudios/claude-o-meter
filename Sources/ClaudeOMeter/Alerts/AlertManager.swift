@@ -19,6 +19,7 @@ final class AlertManager {
     static let shared = AlertManager()
 
     func requestAuthorization() {
+        guard Bundle.main.bundleIdentifier != nil else { return }
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, error in
             if let error { AppLog.shared.error("notification auth error: \(error)", category: "alerts") }
         }
@@ -27,6 +28,7 @@ final class AlertManager {
     /// Fire a sample notification so the user can confirm alerts work. Handles the case where
     /// permission was never granted (prompt) or was denied (open System Settings).
     func sendTest() {
+        guard Bundle.main.bundleIdentifier != nil else { return }
         let center = UNUserNotificationCenter.current()
         center.getNotificationSettings { settings in
             switch settings.authorizationStatus {
@@ -127,6 +129,7 @@ final class AlertManager {
     }
 
     private func notify(title: String, body: String) {
+        guard Bundle.main.bundleIdentifier != nil else { return }
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body

@@ -28,8 +28,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
         AppLog.shared.info("Claude-o-Meter \(version) launched on macOS \(ProcessInfo.processInfo.operatingSystemVersionString)", category: "app")
         NSApp.setActivationPolicy(.accessory)
-        UNUserNotificationCenter.current().delegate = self
-        AlertManager.shared.requestAuthorization()
+        if Bundle.main.bundleIdentifier != nil {
+            UNUserNotificationCenter.current().delegate = self
+            AlertManager.shared.requestAuthorization()
+        }
     }
 
     /// Without this, banners are suppressed while the app is "active" (e.g. popover open),

@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 struct PopoverView: View {
     @EnvironmentObject var store: UsageStore
@@ -894,6 +895,15 @@ struct PopoverView: View {
             Text(updatedLabel)
                 .font(.system(size: 11)).foregroundStyle(.secondary)
             Spacer()
+            Menu {
+                Button("Export CSV…") { runExport(format: .csv) }
+                Button("Export JSON…") { runExport(format: .json) }
+            } label: {
+                Image(systemName: "square.and.arrow.down").font(.system(size: 12))
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help("Export usage data…")
             Button {
                 NSWorkspace.shared.open(UpdateChecker.projectPageURL)
             } label: {
@@ -916,6 +926,33 @@ struct PopoverView: View {
             Button { NSApp.terminate(nil) } label: {
                 Image(systemName: "power").font(.system(size: 12))
             }.buttonStyle(.plain)
+        }
+    }
+
+    // MARK: - Export
+
+    private func runExport(format: ExportFormat) {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = format == .csv ? [.commaSeparatedText] : [.json]
+        let days = store.days
+        let oldest = days.last?.day ?? store.todayKey
+        let newest = days.first?.day ?? store.todayKey
+        panel.nameFieldStringValue = "claude-usage-\(oldest)-to-\(newest).\(format.rawValue)"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let aggregates = store.aggregates
+        Task.detached(priority: .utility) {
+            do {
+                let exportData = try UsageExporter.export(format: format, from: aggregates)
+                try exportData.write(to: url, options: .atomic)
+            } catch {
+                await MainActor.run {
+                    let alert = NSAlert()
+                    alert.messageText = "Export failed"
+                    alert.informativeText = error.localizedDescription
+                    alert.alertStyle = .warning
+                    alert.runModal()
+                }
+            }
         }
     }
 }
