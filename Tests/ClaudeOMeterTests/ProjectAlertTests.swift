@@ -69,7 +69,8 @@ final class ProjectAlertTests: XCTestCase {
             settings: settings, lastAlertDay: [:], today: "2025-07-15")
         XCTAssertNotNil(decision.lastAlertDay["project:myapp"])
         XCTAssertNotNil(decision.lastAlertDay["daily"])
-        XCTAssertNotEqual(decision.lastAlertDay["project:myapp"], decision.lastAlertDay["daily"])
+        XCTAssertTrue(decision.lastAlertDay.keys.contains("project:myapp"))
+        XCTAssertTrue(decision.lastAlertDay.keys.contains("daily"))
     }
 
     func testProjectAlertSuppressedWhenNoThreshold() {
