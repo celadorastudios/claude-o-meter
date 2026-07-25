@@ -3,13 +3,6 @@ import XCTest
 
 final class SessionNudgeTests: XCTestCase {
 
-    private func midday() -> Date {
-        var comps = DateComponents()
-        comps.year = 2025; comps.month = 7; comps.day = 22
-        comps.hour = 14; comps.minute = 0
-        return Calendar.current.date(from: comps)!
-    }
-
     private func aggWithOpus(cost: Double, totalCost: Double? = nil) -> DailyAggregate {
         var agg = DailyAggregate(day: "2025-07-22")
         agg.perModel["opus"] = ModelUsage(model: "opus", rawModel: "claude-opus-4-8", cost: cost)
@@ -20,40 +13,52 @@ final class SessionNudgeTests: XCTestCase {
     }
 
     func testNudgeFiresWhenOpusHeavyAndExpensive() {
-        let agg = aggWithOpus(cost: 80.0)
-        let decision = SessionNudge.evaluate(todayAggregate: agg, lastNudgeTime: nil, now: midday())
+        let agg = aggWithOpus(cost: 50.0)
+        let decision = SessionNudge.evaluate(todayAggregate: agg, lastNudgeTime: nil)
         XCTAssertTrue(decision.shouldNudge)
         XCTAssertTrue(decision.suggestion.contains("Sonnet"))
     }
 
-    func testNudgeDoesNotFireWhenCostIsLow() {
-        let agg = aggWithOpus(cost: 2.0)
-        let decision = SessionNudge.evaluate(todayAggregate: agg, lastNudgeTime: nil, now: midday())
+    func testNudgeDoesNotFireWhenCostBelowThreshold() {
+        let agg = aggWithOpus(cost: 20.0)
+        let decision = SessionNudge.evaluate(todayAggregate: agg, lastNudgeTime: nil)
         XCTAssertFalse(decision.shouldNudge)
     }
 
     func testNudgeDoesNotFireWhenOpusFractionIsLow() {
-        let agg = aggWithOpus(cost: 5.0, totalCost: 80.0)
-        let decision = SessionNudge.evaluate(todayAggregate: agg, lastNudgeTime: nil, now: midday())
-        XCTAssertFalse(decision.shouldNudge)
+        let agg = aggWithOpus(cost: 35.0, totalCost: 200.0)
+        let decision = SessionNudge.evaluate(todayAggregate: agg, lastNudgeTime: nil)
+        XCTAssertFalse(decision.shouldNudge, "Opus is only 17.5% — should not nudge")
     }
 
-    func testNudgeRespectsCoolddown() {
-        let agg = aggWithOpus(cost: 80.0)
-        let recentNudge = midday().addingTimeInterval(-30 * 60)
-        let decision = SessionNudge.evaluate(todayAggregate: agg, lastNudgeTime: recentNudge, now: midday())
+    func testNudgeRespectsCooldown() {
+        let agg = aggWithOpus(cost: 50.0)
+        let recentNudge = Date().addingTimeInterval(-30 * 60)
+        let decision = SessionNudge.evaluate(todayAggregate: agg, lastNudgeTime: recentNudge)
         XCTAssertFalse(decision.shouldNudge, "Should not nudge within cooldown period")
     }
 
     func testNudgeFiresAfterCooldown() {
-        let agg = aggWithOpus(cost: 80.0)
-        let oldNudge = midday().addingTimeInterval(-90 * 60)
-        let decision = SessionNudge.evaluate(todayAggregate: agg, lastNudgeTime: oldNudge, now: midday())
+        let agg = aggWithOpus(cost: 50.0)
+        let oldNudge = Date().addingTimeInterval(-90 * 60)
+        let decision = SessionNudge.evaluate(todayAggregate: agg, lastNudgeTime: oldNudge)
         XCTAssertTrue(decision.shouldNudge)
     }
 
     func testNudgeDoesNotFireWithNoAggregate() {
-        let decision = SessionNudge.evaluate(todayAggregate: nil, lastNudgeTime: nil, now: midday())
+        let decision = SessionNudge.evaluate(todayAggregate: nil, lastNudgeTime: nil)
         XCTAssertFalse(decision.shouldNudge)
+    }
+
+    func testNudgeDoesNotFireJustBelowThreshold() {
+        let agg = aggWithOpus(cost: 29.99)
+        let decision = SessionNudge.evaluate(todayAggregate: agg, lastNudgeTime: nil)
+        XCTAssertFalse(decision.shouldNudge)
+    }
+
+    func testNudgeFiresAtExactThreshold() {
+        let agg = aggWithOpus(cost: 30.0)
+        let decision = SessionNudge.evaluate(todayAggregate: agg, lastNudgeTime: nil)
+        XCTAssertTrue(decision.shouldNudge)
     }
 }
