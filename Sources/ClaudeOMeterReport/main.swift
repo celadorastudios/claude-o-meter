@@ -199,9 +199,13 @@ func scanTranscripts(root: URL, targetDays: Set<String>) -> [UsageEntry] {
     return entries
 }
 
-// MARK: - Pricing (hardcoded defaults matching the app)
+// MARK: - Pricing (reads app's pricing.json, falls back to hardcoded defaults)
+//
+// The GUI app writes pricing.json to ~/Library/Application Support/ClaudeOMeter/.
+// This CLI reads that same file so pricing stays in sync without code duplication.
+// If the file doesn't exist (app never launched), falls back to built-in defaults.
 
-struct ModelPrice {
+struct ModelPrice: Codable {
     let input: Double
     let output: Double
     let cacheRead: Double
@@ -209,21 +213,48 @@ struct ModelPrice {
     let cacheWrite1h: Double
 }
 
-let prices: [String: ModelPrice] = [
+struct PricingFile: Codable {
+    let models: [String: ModelPrice]?
+    let fallback: ModelPrice?
+    let discountPercent: Double?
+}
+
+let defaultPrices: [String: ModelPrice] = [
     "fable":  ModelPrice(input: 10, output: 50, cacheRead: 1.0, cacheWrite5m: 12.5, cacheWrite1h: 20.0),
     "opus":   ModelPrice(input: 5,  output: 25, cacheRead: 0.5, cacheWrite5m: 6.25, cacheWrite1h: 10.0),
     "sonnet": ModelPrice(input: 3,  output: 15, cacheRead: 0.3, cacheWrite5m: 3.75, cacheWrite1h: 6.0),
     "haiku":  ModelPrice(input: 1,  output: 5,  cacheRead: 0.1, cacheWrite5m: 1.25, cacheWrite1h: 2.0),
 ]
 
+func loadPricing() -> (prices: [String: ModelPrice], discount: Double) {
+    let supportDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+        ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
+    let pricingURL = supportDir.appendingPathComponent("ClaudeOMeter/pricing.json")
+
+    guard let data = try? Data(contentsOf: pricingURL),
+          let file = try? JSONDecoder().decode(PricingFile.self, from: data),
+          let models = file.models else {
+        fputs("Info: Using built-in pricing defaults (no ~/Library/Application Support/ClaudeOMeter/pricing.json found)\n", stderr)
+        return (defaultPrices, 0)
+    }
+
+    fputs("Info: Loaded pricing from \(pricingURL.path)\n", stderr)
+    let discount = min(max(file.discountPercent ?? 0, 0), 100)
+    return (models, discount)
+}
+
+let (prices, discountPercent) = loadPricing()
+let discountMultiplier = 1.0 - discountPercent / 100.0
+
 func cost(of tokens: TokenCost, model: String) -> Double {
-    let p = prices[model] ?? prices["opus"]!
+    let p = prices[model] ?? prices["opus"] ?? defaultPrices["opus"]!
     let perM = 1_000_000.0
-    return (Double(tokens.input) / perM * p.input) +
-           (Double(tokens.output) / perM * p.output) +
-           (Double(tokens.cacheRead) / perM * p.cacheRead) +
-           (Double(tokens.cacheWrite5m) / perM * p.cacheWrite5m) +
-           (Double(tokens.cacheWrite1h) / perM * p.cacheWrite1h)
+    let base = (Double(tokens.input) / perM * p.input) +
+               (Double(tokens.output) / perM * p.output) +
+               (Double(tokens.cacheRead) / perM * p.cacheRead) +
+               (Double(tokens.cacheWrite5m) / perM * p.cacheWrite5m) +
+               (Double(tokens.cacheWrite1h) / perM * p.cacheWrite1h)
+    return base * discountMultiplier
 }
 
 // MARK: - Report Generation
