@@ -33,6 +33,7 @@ enum Persistence {
         var settings: AlertSettings = AlertSettings()
         var lastAlertDay: [String: String] = [:]         // alert key -> day last fired
         var lastTipDay: [String: String] = [:]           // tip id -> day last notified
+        var lastNudgeTime: Date? = nil                   // last model-switch nudge fire time
         /// The pricing table version used when the aggregates were last costed.
         /// 0 means unknown (pre-versioning). When this is less than the loaded
         /// pricing version, UsageStore.init() calls Aggregator.recost() to
@@ -58,12 +59,13 @@ enum Persistence {
             settings       = (try? c.decode(AlertSettings.self,               forKey: .settings))       ?? AlertSettings()
             lastAlertDay   = (try? c.decode([String: String].self,            forKey: .lastAlertDay))   ?? [:]
             lastTipDay     = (try? c.decode([String: String].self,            forKey: .lastTipDay))     ?? [:]
+            lastNudgeTime  = try? c.decodeIfPresent(Date.self,               forKey: .lastNudgeTime)
             pricingVersion     = (try? c.decode(Int.self,               forKey: .pricingVersion))     ?? 0
             dataVersion        = (try? c.decode(Int.self,               forKey: .dataVersion))        ?? 0
             todayConcurrency   = (try? c.decode(ConcurrencyStats.self,  forKey: .todayConcurrency))   ?? ConcurrencyStats()
         }
         private enum CodingKeys: String, CodingKey {
-            case scanState, aggregates, settings, lastAlertDay, lastTipDay, pricingVersion, dataVersion, todayConcurrency
+            case scanState, aggregates, settings, lastAlertDay, lastTipDay, lastNudgeTime, pricingVersion, dataVersion, todayConcurrency
         }
     }
 

@@ -31,7 +31,6 @@ final class UsageStore: ObservableObject {
     /// result is discarded if the epoch no longer matches, so an in-flight old-root scan can never
     /// fold stale records back into a snapshot that a root change just cleared.
     private var scanEpoch = 0
-    private var lastNudgeTime: Date?
 
     /// The `projects/` directory currently being scanned, for display in settings.
     var resolvedRootPath: String { scanner.rootDirectory.path }
@@ -177,10 +176,10 @@ final class UsageStore: ObservableObject {
         guard settings.sessionNudgeEnabled else { return }
         let decision = SessionNudge.evaluate(
             todayAggregate: snapshot.aggregates[todayKey],
-            lastNudgeTime: lastNudgeTime
+            lastNudgeTime: snapshot.lastNudgeTime
         )
         if decision.shouldNudge {
-            lastNudgeTime = Date()
+            snapshot.lastNudgeTime = Date()
             AlertManager.shared.sendSessionNudge(decision)
         }
     }
