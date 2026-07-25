@@ -122,6 +122,7 @@ struct AlertSettings: Codable, Sendable, Equatable {
     var dailyThreshold: Double? = nil
     var monthlyThreshold: Double? = nil
     var tipsEnabled: Bool = true
+    var sessionNudgeEnabled: Bool = true
     /// Percentage of the limit at which the "approaching" notification fires (1–99).
     var approachPercent: Int = 80
     /// User override for the Claude config directory whose `projects/` folder is scanned.
@@ -129,21 +130,23 @@ struct AlertSettings: Codable, Sendable, Equatable {
     var projectsConfigDirOverride: String? = nil
 
     init(dailyThreshold: Double? = nil, monthlyThreshold: Double? = nil,
-         tipsEnabled: Bool = true, approachPercent: Int = 80,
-         projectsConfigDirOverride: String? = nil) {
+         tipsEnabled: Bool = true, sessionNudgeEnabled: Bool = true,
+         approachPercent: Int = 80, projectsConfigDirOverride: String? = nil) {
         self.dailyThreshold = dailyThreshold; self.monthlyThreshold = monthlyThreshold
-        self.tipsEnabled = tipsEnabled; self.approachPercent = approachPercent
+        self.tipsEnabled = tipsEnabled; self.sessionNudgeEnabled = sessionNudgeEnabled
+        self.approachPercent = approachPercent
         self.projectsConfigDirOverride = projectsConfigDirOverride
     }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        dailyThreshold   = try? c.decodeIfPresent(Double.self, forKey: .dailyThreshold)
-        monthlyThreshold = try? c.decodeIfPresent(Double.self, forKey: .monthlyThreshold)
-        tipsEnabled      = (try? c.decodeIfPresent(Bool.self,  forKey: .tipsEnabled))    ?? true
-        approachPercent  = (try? c.decodeIfPresent(Int.self,   forKey: .approachPercent)) ?? 80
+        dailyThreshold      = try? c.decodeIfPresent(Double.self, forKey: .dailyThreshold)
+        monthlyThreshold    = try? c.decodeIfPresent(Double.self, forKey: .monthlyThreshold)
+        tipsEnabled         = (try? c.decodeIfPresent(Bool.self,  forKey: .tipsEnabled))         ?? true
+        sessionNudgeEnabled = (try? c.decodeIfPresent(Bool.self,  forKey: .sessionNudgeEnabled)) ?? true
+        approachPercent     = (try? c.decodeIfPresent(Int.self,   forKey: .approachPercent))     ?? 80
         projectsConfigDirOverride = try? c.decodeIfPresent(String.self, forKey: .projectsConfigDirOverride)
     }
     private enum CodingKeys: String, CodingKey {
-        case dailyThreshold, monthlyThreshold, tipsEnabled, approachPercent, projectsConfigDirOverride
+        case dailyThreshold, monthlyThreshold, tipsEnabled, sessionNudgeEnabled, approachPercent, projectsConfigDirOverride
     }
 }

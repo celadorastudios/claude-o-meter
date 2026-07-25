@@ -174,6 +174,7 @@ final class UsageStore: ObservableObject {
     }
 
     private func runSessionNudge() {
+        guard settings.sessionNudgeEnabled else { return }
         let decision = SessionNudge.evaluate(
             todayAggregate: snapshot.aggregates[todayKey],
             lastNudgeTime: lastNudgeTime

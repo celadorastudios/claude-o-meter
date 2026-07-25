@@ -235,6 +235,16 @@ struct PopoverView: View {
             .toggleStyle(.switch)
             .controlSize(.mini)
 
+            Toggle(isOn: Binding(
+                get: { draftSettings.sessionNudgeEnabled },
+                set: { draftSettings.sessionNudgeEnabled = $0 }
+            )) {
+                Text("Model downgrade nudge")
+                    .font(.system(size: 11))
+            }
+            .toggleStyle(.switch)
+            .controlSize(.mini)
+
             Toggle(isOn: $launchAtLogin) {
                 Text("Start at login")
                     .font(.system(size: 11))
