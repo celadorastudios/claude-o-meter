@@ -269,6 +269,12 @@ struct HistoryChart: View {
     // MARK: - Lookup helpers
 
     private func totalCost(for day: String) -> Double {
+        if mode == .weekly {
+            guard let bucket = weekBuckets.first(where: { $0.label == day }) else { return 0 }
+            return bucket.days.filter { $0 <= todayKey }.reduce(0.0) { sum, d in
+                sum + (allAggregates[d]?.totalCost ?? 0)
+            }
+        }
         if mode == .month { return allAggregates[day]?.totalCost ?? 0 }
         return ordered.first { $0.day == day }?.totalCost ?? 0
     }
@@ -276,6 +282,14 @@ struct HistoryChart: View {
     private func modelBreakdown(for day: String) -> [(model: String, cost: Double)] {
         let models = allKnownModels
         guard !models.isEmpty else { return [] }
+        if mode == .weekly {
+            guard let bucket = weekBuckets.first(where: { $0.label == day }) else { return [] }
+            let days = bucket.days.filter { $0 <= todayKey }
+            return models.map { model in
+                let cost = days.reduce(0.0) { sum, d in sum + (allAggregates[d]?.perModel[model]?.cost ?? 0) }
+                return (model, cost)
+            }
+        }
         let agg = mode == .month ? allAggregates[day] : ordered.first(where: { $0.day == day })
         return models.map { model in (model, agg?.perModel[model]?.cost ?? 0) }
     }

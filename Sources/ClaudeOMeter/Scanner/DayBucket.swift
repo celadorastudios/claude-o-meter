@@ -48,7 +48,7 @@ enum DayBucket {
 
     // MARK: - Week helpers
 
-    private static let gregorian = Calendar(identifier: .gregorian)
+    nonisolated(unsafe) private static let gregorian = Calendar(identifier: .gregorian)
 
     /// The Monday of the ISO week containing `date`, as "yyyy-MM-dd".
     static func weekMonday(from date: Date = Date()) -> String {
@@ -81,7 +81,7 @@ enum DayBucket {
         return "\(shortDate(first)) – \(shortDate(last))"
     }
 
-    private static let shortDateFormatter: DateFormatter = {
+    nonisolated(unsafe) private static let shortDateFormatter: DateFormatter = {
         let f = DateFormatter()
         f.calendar = Calendar(identifier: .gregorian)
         f.locale = Locale(identifier: "en_US_POSIX")
