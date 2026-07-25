@@ -55,6 +55,14 @@ final class AlertManager {
         notify(title: insight.title, body: insight.detail)
     }
 
+    /// Fire a real-time model-switch nudge.
+    func sendSessionNudge(_ decision: SessionNudge.Decision) {
+        notify(
+            title: "Consider switching to Sonnet",
+            body: decision.suggestion
+        )
+    }
+
     /// Open System Settings → Notifications so the user can enable alerts for the app.
     func openNotificationSettings() {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.notifications") {
