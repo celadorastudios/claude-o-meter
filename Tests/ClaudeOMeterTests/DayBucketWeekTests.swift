@@ -36,14 +36,42 @@ final class DayBucketWeekTests: XCTestCase {
 
     func testWeekRangeLabelFormat() {
         let label = DayBucket.weekRangeLabel(startingMonday: "2025-07-14")
-        XCTAssertTrue(label.contains("–"))
-        XCTAssertTrue(label.contains("Jul 14"))
-        XCTAssertTrue(label.contains("Jul 20"))
+        XCTAssertEqual(label, "Jul 14 – Jul 20")
+    }
+
+    func testWeekRangeLabelSpanningMonthBoundary() {
+        // 2025-06-30 is a Monday, week ends Jul 6
+        let label = DayBucket.weekRangeLabel(startingMonday: "2025-06-30")
+        XCTAssertEqual(label, "Jun 30 – Jul 6")
+    }
+
+    func testWeekRangeLabelSpanningYearBoundary() {
+        // 2025-12-29 is a Monday, week ends 2026-01-04
+        let label = DayBucket.weekRangeLabel(startingMonday: "2025-12-29")
+        XCTAssertEqual(label, "Dec 29 – Jan 4")
     }
 
     func testWeekMondayWeeksAgo() {
         let wed = DayBucket.date(fromDay: "2025-07-16")!
         let oneWeekAgo = DayBucket.weekMonday(weeksAgo: 1, from: wed)
         XCTAssertEqual(oneWeekAgo, "2025-07-07")
+    }
+
+    func testWeekMondayForSaturday() {
+        // 2025-07-19 is a Saturday
+        let sat = DayBucket.date(fromDay: "2025-07-19")!
+        let result = DayBucket.weekMonday(from: sat)
+        XCTAssertEqual(result, "2025-07-14")
+    }
+
+    func testWeekMondayWeeksAgoZero() {
+        let wed = DayBucket.date(fromDay: "2025-07-16")!
+        let current = DayBucket.weekMonday(weeksAgo: 0, from: wed)
+        XCTAssertEqual(current, "2025-07-14")
+    }
+
+    func testDaysInWeekInvalidInput() {
+        let days = DayBucket.daysInWeek(startingMonday: "not-a-date")
+        XCTAssertEqual(days, [])
     }
 }

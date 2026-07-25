@@ -719,6 +719,7 @@ struct PopoverView: View {
                 mondays.insert(DayBucket.weekMonday(from: d))
             }
         }
+        mondays.insert(DayBucket.weekMonday())
         return mondays.sorted()
     }
 

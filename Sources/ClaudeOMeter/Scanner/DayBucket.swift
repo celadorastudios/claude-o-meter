@@ -48,29 +48,28 @@ enum DayBucket {
 
     // MARK: - Week helpers
 
+    private static let gregorian = Calendar(identifier: .gregorian)
+
     /// The Monday of the ISO week containing `date`, as "yyyy-MM-dd".
     static func weekMonday(from date: Date = Date()) -> String {
-        let cal = Calendar.current
-        let weekday = cal.component(.weekday, from: date)
+        let weekday = gregorian.component(.weekday, from: date)
         // .weekday: 1=Sun, 2=Mon, ... 7=Sat. Offset to Monday-based.
         let daysFromMonday = (weekday + 5) % 7
-        let monday = cal.date(byAdding: .day, value: -daysFromMonday, to: date) ?? date
+        let monday = gregorian.date(byAdding: .day, value: -daysFromMonday, to: date) ?? date
         return localDay(from: monday)
     }
 
     /// The Monday of the week `weeksAgo` weeks before the week containing `date`.
     static func weekMonday(weeksAgo: Int, from date: Date = Date()) -> String {
-        let cal = Calendar.current
-        let shifted = cal.date(byAdding: .weekOfYear, value: -weeksAgo, to: date) ?? date
+        let shifted = gregorian.date(byAdding: .weekOfYear, value: -weeksAgo, to: date) ?? date
         return weekMonday(from: shifted)
     }
 
     /// All 7 days (Mon–Sun) for the week whose Monday is `monday`.
     static func daysInWeek(startingMonday monday: String) -> [String] {
         guard let start = date(fromDay: monday) else { return [] }
-        let cal = Calendar.current
         return (0..<7).map { offset in
-            let d = cal.date(byAdding: .day, value: offset, to: start) ?? start
+            let d = gregorian.date(byAdding: .day, value: offset, to: start) ?? start
             return localDay(from: d)
         }
     }
@@ -82,10 +81,16 @@ enum DayBucket {
         return "\(shortDate(first)) – \(shortDate(last))"
     }
 
+    private static let shortDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .gregorian)
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "MMM d"
+        return f
+    }()
+
     private static func shortDate(_ day: String) -> String {
         guard let d = date(fromDay: day) else { return day }
-        let f = DateFormatter()
-        f.dateFormat = "MMM d"
-        return f.string(from: d)
+        return shortDateFormatter.string(from: d)
     }
 }
