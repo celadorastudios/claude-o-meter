@@ -104,22 +104,33 @@ func normalizeModel(_ raw: String) -> String {
     return "unknown"
 }
 
-func localDay(from date: Date) -> String {
+private let dayFormatter: DateFormatter = {
     let f = DateFormatter()
     f.calendar = Calendar(identifier: .gregorian)
     f.locale = Locale(identifier: "en_US_POSIX")
     f.timeZone = TimeZone.current
     f.dateFormat = "yyyy-MM-dd"
-    return f.string(from: date)
+    return f
+}()
+
+private let isoFormatter: ISO8601DateFormatter = {
+    let f = ISO8601DateFormatter()
+    f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return f
+}()
+
+private let isoNoFracFormatter: ISO8601DateFormatter = {
+    let f = ISO8601DateFormatter()
+    f.formatOptions = [.withInternetDateTime]
+    return f
+}()
+
+func localDay(from date: Date) -> String {
+    dayFormatter.string(from: date)
 }
 
 func localDay(fromISO ts: String) -> String? {
-    let iso = ISO8601DateFormatter()
-    iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    let isoNoFrac = ISO8601DateFormatter()
-    isoNoFrac.formatOptions = [.withInternetDateTime]
-
-    guard let date = iso.date(from: ts) ?? isoNoFrac.date(from: ts) else { return nil }
+    guard let date = isoFormatter.date(from: ts) ?? isoNoFracFormatter.date(from: ts) else { return nil }
     return localDay(from: date)
 }
 
@@ -167,11 +178,19 @@ func scanTranscripts(root: URL, targetDays: Set<String>) -> [UsageEntry] {
             let input = (usage["input_tokens"] as? Int) ?? 0
             let output = (usage["output_tokens"] as? Int) ?? 0
             let cacheRead = (usage["cache_read_input_tokens"] as? Int) ?? 0
-            let cacheWrite = (usage["cache_creation_input_tokens"] as? Int) ?? 0
+            let cacheWriteTotal = (usage["cache_creation_input_tokens"] as? Int) ?? 0
+
+            var write5m = cacheWriteTotal
+            var write1h = 0
+            if let breakdown = usage["cache_creation"] as? [String: Any] {
+                let b5 = (breakdown["ephemeral_5m_input_tokens"] as? Int) ?? 0
+                let b1 = (breakdown["ephemeral_1h_input_tokens"] as? Int) ?? 0
+                if b5 + b1 > 0 { write5m = b5; write1h = b1 }
+            }
 
             entries.append(UsageEntry(
                 id: id, day: day, model: model,
-                tokens: TokenCost(input: input, output: output, cacheRead: cacheRead, cacheWrite5m: cacheWrite),
+                tokens: TokenCost(input: input, output: output, cacheRead: cacheRead, cacheWrite5m: write5m, cacheWrite1h: write1h),
                 projectDir: projectDir
             ))
         }
@@ -186,14 +205,15 @@ struct ModelPrice {
     let input: Double
     let output: Double
     let cacheRead: Double
-    let cacheWrite: Double
+    let cacheWrite5m: Double
+    let cacheWrite1h: Double
 }
 
 let prices: [String: ModelPrice] = [
-    "fable":  ModelPrice(input: 10, output: 50, cacheRead: 1.0, cacheWrite: 12.5),
-    "opus":   ModelPrice(input: 5,  output: 25, cacheRead: 0.5, cacheWrite: 6.25),
-    "sonnet": ModelPrice(input: 3,  output: 15, cacheRead: 0.3, cacheWrite: 3.75),
-    "haiku":  ModelPrice(input: 1,  output: 5,  cacheRead: 0.1, cacheWrite: 1.25),
+    "fable":  ModelPrice(input: 10, output: 50, cacheRead: 1.0, cacheWrite5m: 12.5, cacheWrite1h: 20.0),
+    "opus":   ModelPrice(input: 5,  output: 25, cacheRead: 0.5, cacheWrite5m: 6.25, cacheWrite1h: 10.0),
+    "sonnet": ModelPrice(input: 3,  output: 15, cacheRead: 0.3, cacheWrite5m: 3.75, cacheWrite1h: 6.0),
+    "haiku":  ModelPrice(input: 1,  output: 5,  cacheRead: 0.1, cacheWrite5m: 1.25, cacheWrite1h: 2.0),
 ]
 
 func cost(of tokens: TokenCost, model: String) -> Double {
@@ -202,7 +222,8 @@ func cost(of tokens: TokenCost, model: String) -> Double {
     return (Double(tokens.input) / perM * p.input) +
            (Double(tokens.output) / perM * p.output) +
            (Double(tokens.cacheRead) / perM * p.cacheRead) +
-           (Double(tokens.cacheWrite5m) / perM * p.cacheWrite)
+           (Double(tokens.cacheWrite5m) / perM * p.cacheWrite5m) +
+           (Double(tokens.cacheWrite1h) / perM * p.cacheWrite1h)
 }
 
 // MARK: - Report Generation
@@ -347,10 +368,14 @@ let config = parseArgs()
 let report = generateReport(config: config)
 
 if config.jsonOutput {
-    let encoder = JSONEncoder()
-    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-    if let data = try? encoder.encode(report), let json = String(data: data, encoding: .utf8) {
-        print(json)
+    do {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(report)
+        print(String(data: data, encoding: .utf8) ?? "{}")
+    } catch {
+        fputs("Error encoding JSON: \(error.localizedDescription)\n", stderr)
+        exit(1)
     }
 } else if let webhook = config.slackWebhookURL {
     let message = formatSlackMessage(report)
