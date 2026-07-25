@@ -10,6 +10,10 @@ let package = Package(
             resources: [.process("Resources")],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
+        .executableTarget(
+            name: "ClaudeOMeterReport",
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
         .testTarget(
             name: "ClaudeOMeterTests",
             dependencies: ["ClaudeOMeter"],
