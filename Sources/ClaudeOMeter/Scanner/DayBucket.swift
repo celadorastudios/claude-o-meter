@@ -48,7 +48,7 @@ enum DayBucket {
 
     // MARK: - Week helpers
 
-    nonisolated(unsafe) private static let gregorian = Calendar(identifier: .gregorian)
+    private static let gregorian = Calendar(identifier: .gregorian)
 
     /// The Monday of the ISO week containing `date`, as "yyyy-MM-dd".
     static func weekMonday(from date: Date = Date()) -> String {
@@ -74,14 +74,19 @@ enum DayBucket {
         }
     }
 
-    /// Human-readable range label: "Jun 30 – Jul 6".
+    /// Human-readable range label: "Jun 30 – Jul 6" or "Dec 29 – Jan 4 '26" when spanning years.
     static func weekRangeLabel(startingMonday monday: String) -> String {
         let days = daysInWeek(startingMonday: monday)
         guard let first = days.first, let last = days.last else { return monday }
+        let firstYear = first.prefix(4)
+        let lastYear = last.prefix(4)
+        if firstYear != lastYear {
+            return "\(shortDate(first)) – \(shortDateWithYear(last))"
+        }
         return "\(shortDate(first)) – \(shortDate(last))"
     }
 
-    nonisolated(unsafe) private static let shortDateFormatter: DateFormatter = {
+    private static let shortDateFormatter: DateFormatter = {
         let f = DateFormatter()
         f.calendar = Calendar(identifier: .gregorian)
         f.locale = Locale(identifier: "en_US_POSIX")
@@ -89,8 +94,21 @@ enum DayBucket {
         return f
     }()
 
+    private static let shortDateYearFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .gregorian)
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "MMM d ''yy"
+        return f
+    }()
+
     private static func shortDate(_ day: String) -> String {
         guard let d = date(fromDay: day) else { return day }
         return shortDateFormatter.string(from: d)
+    }
+
+    private static func shortDateWithYear(_ day: String) -> String {
+        guard let d = date(fromDay: day) else { return day }
+        return shortDateYearFormatter.string(from: d)
     }
 }

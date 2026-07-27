@@ -13,6 +13,16 @@ enum ChartScaling {
         max(max(dataMax, floor), limit ?? 0) * 1.1
     }
 
+    /// Computes the tallest bar in weekly mode, accounting for both actual cost and the
+    /// projection ghost bar so the y-axis doesn't clip early in the week.
+    static func weeklyDataMax(
+        bucketActuals: [Double],
+        bucketProjections: [Double]
+    ) -> Double {
+        let combined = zip(bucketActuals, bucketProjections).map { $0 + $1 }
+        return max(combined.max() ?? 1.0, 1.0)
+    }
+
     /// Which side of the limit rule its label sits on, chosen to stay clear of the data:
     /// - **below** while the data stays under budget — the line sits high in the plot, so the
     ///   gap beneath it is clear and a label above would clip the top edge.

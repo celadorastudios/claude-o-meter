@@ -727,6 +727,16 @@ struct PopoverView: View {
         viewingWeekMonday == DayBucket.weekMonday()
     }
 
+    private var hasPreviousWeek: Bool {
+        guard let idx = availableWeeks.firstIndex(of: viewingWeekMonday) else { return false }
+        return idx > availableWeeks.startIndex
+    }
+
+    private var hasNextWeek: Bool {
+        guard let idx = availableWeeks.firstIndex(of: viewingWeekMonday) else { return false }
+        return availableWeeks.index(after: idx) < availableWeeks.endIndex
+    }
+
     private var weekNavigator: some View {
         HStack(spacing: 4) {
             Spacer(minLength: 0)
@@ -739,7 +749,7 @@ struct PopoverView: View {
                     .font(.system(size: 10, weight: .semibold))
             }
             .buttonStyle(.plain)
-            .disabled(availableWeeks.first == viewingWeekMonday)
+            .disabled(hasPreviousWeek == false)
 
             Text(DayBucket.weekRangeLabel(startingMonday: viewingWeekMonday))
                 .font(.system(size: 11, weight: .medium))
@@ -757,7 +767,7 @@ struct PopoverView: View {
                     .font(.system(size: 10, weight: .semibold))
             }
             .buttonStyle(.plain)
-            .disabled(availableWeeks.last == viewingWeekMonday)
+            .disabled(hasNextWeek == false)
 
             if !isCurrentWeekView {
                 Button("Now") {

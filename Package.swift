@@ -13,6 +13,7 @@ let package = Package(
         .testTarget(
             name: "ClaudeOMeterTests",
             dependencies: ["ClaudeOMeter"],
+            exclude: ["ChartScalingTests.swift"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
     ]

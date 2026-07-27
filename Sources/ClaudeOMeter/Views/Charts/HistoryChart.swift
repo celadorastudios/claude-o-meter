@@ -222,10 +222,13 @@ struct HistoryChart: View {
             return max(top, 1.0)
         }
         if mode == .weekly {
-            let barTotals = weekBuckets.map { bucket in
+            let actuals = weekBuckets.map { bucket in
                 bucket.days.filter { $0 <= todayKey }.reduce(0.0) { $0 + (allAggregates[$1]?.totalCost ?? 0) }
             }
-            return max(barTotals.max() ?? 1.0, 1.0)
+            let projections = weekBuckets.map { bucket in
+                weeklyProjectionBars.first(where: { $0.day == bucket.label })?.cost ?? 0
+            }
+            return ChartScaling.weeklyDataMax(bucketActuals: actuals, bucketProjections: projections)
         }
         return ordered.map { $0.totalCost }.max() ?? 1.0
     }

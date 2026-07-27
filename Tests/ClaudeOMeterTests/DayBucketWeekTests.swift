@@ -46,9 +46,9 @@ final class DayBucketWeekTests: XCTestCase {
     }
 
     func testWeekRangeLabelSpanningYearBoundary() {
-        // 2025-12-29 is a Monday, week ends 2026-01-04
+        // 2025-12-29 is a Monday, week ends 2026-01-04 — includes year for disambiguation
         let label = DayBucket.weekRangeLabel(startingMonday: "2025-12-29")
-        XCTAssertEqual(label, "Dec 29 – Jan 4")
+        XCTAssertEqual(label, "Dec 29 – Jan 4 '26")
     }
 
     func testWeekMondayWeeksAgo() {
