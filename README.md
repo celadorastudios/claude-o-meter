@@ -48,6 +48,47 @@ This downloads the latest release, installs it to `~/Applications/`, clears the 
 
 > **Manual install:** Download `ClaudeOMeter.zip` from [Releases](https://github.com/celadorastudios/claude-o-meter/releases), unzip, drag `ClaudeOMeter.app` to `~/Applications/` or `/Applications/`, then run `xattr -dr com.apple.quarantine ~/Applications/ClaudeOMeter.app` before launching.
 
+### Why the quarantine step is needed
+
+The app is ad-hoc signed rather than signed with an Apple Developer ID, so macOS cannot
+attribute it to a registered developer and Gatekeeper blocks it on first launch. Clearing
+the quarantine flag is what gets past that.
+
+Because you are being asked to disable a safety check, you should be able to confirm the
+download is genuinely ours. Every release is published with GitHub build provenance, which
+ties the zip to the exact commit and workflow run that produced it.
+
+**The installer checks this for you, and so does the in-app updater.** Neither needs any
+tooling you do not already have, just `curl` and `shasum` on the command line and the
+system frameworks in the app.
+
+The check is required, not advisory: if provenance cannot be confirmed, nothing is
+installed and your existing copy is left untouched. Two different failures are reported
+separately, because they mean different things.
+
+| What you see | What it means |
+| --- | --- |
+| `no build provenance found` | GitHub answered, and it holds no attestation for this file. Either it did not come from this repository's release workflow, or it was modified afterwards. Do not run it. |
+| `could not reach GitHub to verify` | The check could not be completed (offline, rate limited, or an outage). This says nothing about the file itself. Retry. |
+
+The second case still refuses to install, which is deliberate. Anyone able to substitute
+the release asset is also able to block `api.github.com`, so treating an unreachable API
+as a pass would hand the exact adversary this check exists to stop a one-host bypass. If
+you understand that and need to proceed anyway during an outage, set
+`CLAUDEOMETER_INSECURE=1`.
+
+To check a manual download yourself:
+
+```bash
+shasum -a 256 ClaudeOMeter.zip                     # note the digest
+curl -s https://api.github.com/repos/celadorastudios/claude-o-meter/attestations/sha256:<digest>
+```
+
+A response containing an attestation bundle means GitHub confirms that file came out of
+this repository's release workflow. If you have the GitHub CLI, `gh attestation verify
+ClaudeOMeter.zip --repo celadorastudios/claude-o-meter` does the full offline cryptographic
+check instead, but it is not required.
+
 ---
 
 ## Build from source

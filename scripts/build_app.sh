@@ -20,7 +20,13 @@ swift build -c release
 BIN_PATH="$(swift build -c release --show-bin-path)"
 
 echo "==> assembling $APP"
-rm -rf "$APP"
+# $APP is repo-relative and rebuilt from scratch each run, so bound the delete to a path
+# that actually looks like the bundle rather than whatever the variables expanded to.
+case "$APP" in
+  *..*)      echo "error: refusing to remove unsafe path: $APP" >&2; exit 1 ;;
+  */*.app)   rm -rf "$APP" ;;
+  *)         echo "error: refusing to remove unsafe path: $APP" >&2; exit 1 ;;
+esac
 mkdir -p "$MACOS" "$RES"
 
 cp "$BIN_PATH/$APP_NAME" "$MACOS/$APP_NAME"
@@ -66,7 +72,9 @@ PLIST
 codesign --force --sign - "$MACOS/$APP_NAME"
 codesign --force --sign - "$APP"
 echo "==> signature:"
-codesign --verify --verbose "$APP" 2>&1 | tail -1 || true
+# Deliberately not `|| true`: a broken seal should fail the build rather than ship
+# silently. Same checks as before, only the result is no longer discarded.
+codesign --verify --verbose "$APP"
 
 echo "==> done: $APP"
 echo "    Run:    open $APP"

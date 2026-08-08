@@ -1,0 +1,57 @@
+name: PR checks
+
+# Separate from ci.yml on purpose. That workflow answers "does it build and do the tests
+# pass". This one answers "is it safe to publish", which is a different question with
+# different failure modes, and it should stay legible as its own signal rather than being
+# one more step in a build log.
+#
+# Matches the equivalent job in celadorastudios/partsbin and celadora.net, so the three
+# repos fail the same way on the same things.
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Runs on ubuntu, not the macos runner ci.yml uses: none of this needs Swift, and the
+  # linux runners are both faster to schedule and cheaper. node is preinstalled on the
+  # image, so there is no setup step and no lockfile to break.
+  secrets:
+    name: Secrets and PII
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0 # gitleaks scans history, not just the tip
+
+      # Our own rules: personal data, which gitleaks has no concept of, plus a cheap
+      # credential backstop that needs no network. This repo reads Claude Code
+      # transcripts, so a fixture captured from a real ~/.claude directory is the
+      # realistic way a home path or a pasted API key reaches the history.
+      - name: Secret and PII scan
+        run: node scripts/check-secrets.mjs
+
+      # Proves the scanner still matches. A secret scanner fails silently: if a regex
+      # stops matching, every run goes green and looks exactly like a clean repo.
+      - name: Secret scanner self-test
+        run: ./scripts/tests/check_secrets_test.sh
+
+      # gitleaks for the maintained credential ruleset. Pinned and fetched as a binary
+      # rather than via the action, which gates on a licence key for organisation-owned
+      # repos.
+      - name: Run gitleaks
+        env:
+          GITLEAKS_VERSION: 8.30.1
+        run: |
+          curl -sSfL -o /tmp/gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          /tmp/gitleaks detect --source . --config .gitleaks.toml --redact --verbose --exit-code 1

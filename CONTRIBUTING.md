@@ -1,6 +1,12 @@
 # Contributing to ClaudeOMeter
 
-Thanks for your interest. This is a small tool — contributions are welcome, but please read this first so we stay on the same page.
+> **Status: not open to outside contributions yet.**
+> The project is still moving fast and `master` is restricted, so pull requests from
+> outside the maintainer team will be closed without review for now. Bug reports and
+> feature requests are very welcome in the meantime, so please open an issue instead.
+> This note will be removed once things settle down.
+
+Thanks for your interest. This is a small tool, and the notes below apply to the maintainer team.
 
 ## What belongs here
 
