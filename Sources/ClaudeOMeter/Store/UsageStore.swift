@@ -64,9 +64,45 @@ final class UsageStore: ObservableObject {
             Persistence.save(snapshot)
         }
 
+        reconcileLoginItem()
+
         rebuildPublished()
         startAutoRefresh()
         Task { await checkForUpdate() }
+    }
+
+    /// Keeps the launch-at-login setting attached to the app after it changes location.
+    ///
+    /// `SMAppService` registers the running bundle, so the registration does not follow a
+    /// move. Anyone stranded by the old hardcoded-`/Applications` updater lands in a new
+    /// directory when they reinstall, which would otherwise silently turn their setting
+    /// off. See `LoginItemManager.shouldReRegister` for why this only acts on a move.
+    private func reconcileLoginItem() {
+        let currentPath = Bundle.main.bundleURL.path
+
+        // First launch that records a path: adopt the system's current answer as intent,
+        // otherwise an existing user's enabled setting would read as "never wanted it"
+        // and a later move would not be migrated.
+        if snapshot.lastBundlePath.isEmpty {
+            snapshot.launchAtLogin = LoginItemManager.shared.isEnabled
+        } else {
+            LoginItemManager.shared.reconcileAfterMove(intendedEnabled: snapshot.launchAtLogin,
+                                                       lastBundlePath: snapshot.lastBundlePath,
+                                                       currentBundlePath: currentPath)
+        }
+
+        guard snapshot.lastBundlePath != currentPath else { return }
+        snapshot.lastBundlePath = currentPath
+        Persistence.save(snapshot)
+    }
+
+    /// Records the user's launch-at-login intent alongside applying it, so the setting can
+    /// be restored if the bundle later moves.
+    func setLaunchAtLogin(_ enabled: Bool) {
+        LoginItemManager.shared.setEnabled(enabled)
+        guard snapshot.launchAtLogin != enabled else { return }
+        snapshot.launchAtLogin = enabled
+        Persistence.save(snapshot)
     }
 
     /// Refresh now and then on a fixed interval so the menu-bar total stays current

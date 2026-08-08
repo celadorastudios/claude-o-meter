@@ -242,7 +242,9 @@ struct PopoverView: View {
             .toggleStyle(.switch)
             .controlSize(.mini)
             .onChange(of: launchAtLogin) { _, newValue in
-                LoginItemManager.shared.setEnabled(newValue)
+                // Goes through the store so the choice is persisted as intent, not just
+                // applied to the system, and survives the bundle moving.
+                store.setLaunchAtLogin(newValue)
                 loginItemNeedsApproval = LoginItemManager.shared.requiresApproval
             }
 
