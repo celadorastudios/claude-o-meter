@@ -16,7 +16,7 @@ Claude-o-Meter is built for developers who are **billed per-token** for Claude C
 
 Claude Code writes per-token cost data into its local JSONL transcripts for these access methods, which is what Claude-o-Meter reads and aggregates.
 
-> **Claude Pro / Max subscription users:** If you pay Anthropic a flat monthly fee, your transcripts do not contain per-token cost data and Claude-o-Meter will show \$0.00 for everything. Subscription plan support (token-usage tracking, shadow pricing) is [planned for a future release](https://github.com/Deklin/claude-o-meter/issues/11) but not yet implemented.
+> **Claude Pro / Max subscription users:** If you pay Anthropic a flat monthly fee, your transcripts do not contain per-token cost data and Claude-o-Meter will show \$0.00 for everything. Subscription plan support (token-usage tracking, shadow pricing) is [planned for a future release](https://github.com/celadorastudios/claude-o-meter/issues/2) but not yet implemented.
 
 ---
 
@@ -41,12 +41,12 @@ Claude Code writes detailed usage logs to `~/.claude/projects/**/*.jsonl`. Claud
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Deklin/claude-o-meter/master/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/celadorastudios/claude-o-meter/master/scripts/install.sh | bash
 ```
 
 This downloads the latest release, installs it to `~/Applications/`, clears the Gatekeeper quarantine flag automatically, and launches the app. No `sudo` required.
 
-> **Manual install:** Download `ClaudeOMeter.zip` from [Releases](https://github.com/Deklin/claude-o-meter/releases), unzip, drag `ClaudeOMeter.app` to `~/Applications/` or `/Applications/`, then run `xattr -dr com.apple.quarantine ~/Applications/ClaudeOMeter.app` before launching.
+> **Manual install:** Download `ClaudeOMeter.zip` from [Releases](https://github.com/celadorastudios/claude-o-meter/releases), unzip, drag `ClaudeOMeter.app` to `~/Applications/` or `/Applications/`, then run `xattr -dr com.apple.quarantine ~/Applications/ClaudeOMeter.app` before launching.
 
 ---
 
@@ -55,7 +55,7 @@ This downloads the latest release, installs it to `~/Applications/`, clears the 
 Requires macOS 14+ and Xcode Command Line Tools (`xcode-select --install`).
 
 ```bash
-git clone https://github.com/Deklin/claude-o-meter.git
+git clone https://github.com/celadorastudios/claude-o-meter.git
 cd claude-o-meter
 
 # Build distributable .app (no Dock icon, ad-hoc signed)
@@ -201,7 +201,7 @@ For deeper inspection, open **Console.app**, filter by `ClaudeOMeter`, and repro
 
 ## Contributing
 
-Feedback and PRs welcome. Open an issue or ping [@Deklin](https://github.com/Deklin).
+Feedback and PRs welcome. Open an issue or ping [@celadorastudios](https://github.com/celadorastudios).
 
 ---
 

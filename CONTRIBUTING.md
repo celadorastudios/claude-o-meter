@@ -24,7 +24,7 @@ If you're unsure, open an issue first.
 ## Getting started
 
 ```bash
-git clone https://github.com/Deklin/claude-o-meter.git
+git clone https://github.com/celadorastudios/claude-o-meter.git
 cd claude-o-meter
 
 # Build the .app (recommended — required for notifications and full functionality)
