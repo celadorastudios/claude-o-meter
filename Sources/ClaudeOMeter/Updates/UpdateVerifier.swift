@@ -60,9 +60,19 @@ enum UpdateVerifier {
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue("ClaudeOMeter", forHTTPHeaderField: "User-Agent")
 
+        // A digest GitHub has never attested returns 404, not an empty list, so anything
+        // other than a 200 carrying at least one attestation counts as unverified.
         guard let (data, response) = try? await URLSession.shared.data(for: request),
-              (response as? HTTPURLResponse)?.statusCode == 200,
-              let payload = try? JSONDecoder().decode(AttestationResponse.self, from: data) else {
+              (response as? HTTPURLResponse)?.statusCode == 200 else {
+            return false
+        }
+        return hasAttestation(inResponseBody: data)
+    }
+
+    /// Parses the attestations endpoint payload. Split out from the network call so the
+    /// response shapes GitHub actually returns can be tested directly.
+    static func hasAttestation(inResponseBody data: Data) -> Bool {
+        guard let payload = try? JSONDecoder().decode(AttestationResponse.self, from: data) else {
             return false
         }
         return !(payload.attestations ?? []).isEmpty
@@ -95,7 +105,7 @@ enum UpdateVerifier {
     }
 
     /// Only the presence and count of attestations matters, so the entries stay opaque.
-    private struct AttestationResponse: Decodable {
+    struct AttestationResponse: Decodable {
         struct Entry: Decodable {}
         let attestations: [Entry]?
     }

@@ -41,3 +41,8 @@ jobs:
 
       - name: Test
         run: swift test
+
+      # Covers the installer end to end with every external tool stubbed, so the
+      # provenance branches and the delete guards are exercised without network access.
+      - name: Installer script tests
+        run: ./scripts/tests/install_test.sh

@@ -8,6 +8,24 @@ APP_NAME="ClaudeOMeter"
 INSTALL_DIR="$HOME/Applications"
 MIN_MACOS=14
 
+# Guard rail for every recursive delete in this script. A path is only removed if it is
+# absolute, at least two levels deep, and free of "..". If $HOME or a temp path ever came
+# back empty or malformed, this deletes nothing instead of something catastrophic.
+safe_rm() {
+  target="${1:-}"
+  case "$target" in
+    ''|'/')  return 0 ;;
+    *..*)    return 0 ;;
+    /*/*)    rm -rf "$target" ;;
+    *)       return 0 ;;
+  esac
+}
+
+# $HOME is used to build the install path, so refuse to continue if it is unusable.
+case "${HOME:-}" in
+  ''|'/') echo "error: \$HOME is not set to a usable directory" >&2; exit 1 ;;
+esac
+
 # Require macOS 14+
 OS_MAJOR=$(sw_vers -productVersion | cut -d. -f1)
 if (( OS_MAJOR < MIN_MACOS )); then
@@ -28,7 +46,7 @@ DOWNLOAD_URL="https://github.com/$REPO/releases/download/$TAG/$APP_NAME.zip"
 
 echo "==> Downloading $APP_NAME $TAG..."
 TMP_DIR=$(mktemp -d)
-trap 'rm -rf "$TMP_DIR"' EXIT
+trap 'safe_rm "$TMP_DIR"' EXIT
 
 curl -fL --proto '=https' --tlsv1.2 --progress-bar "$DOWNLOAD_URL" -o "$TMP_DIR/$APP_NAME.zip"
 
@@ -81,7 +99,7 @@ if pgrep -x "$APP_NAME" &>/dev/null; then
   sleep 1
 fi
 
-rm -rf "$INSTALL_DIR/$APP_NAME.app"
+safe_rm "$INSTALL_DIR/$APP_NAME.app"
 cp -R "$APP_SRC" "$INSTALL_DIR/"
 
 echo "==> Clearing Gatekeeper quarantine..."
