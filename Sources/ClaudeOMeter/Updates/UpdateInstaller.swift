@@ -8,8 +8,9 @@ enum UpdateInstaller {
         case appNotFound
     }
 
-    /// Downloads the zip, replaces /Applications/ClaudeOMeter.app via a helper script, then quits.
-    static func install(from downloadURL: URL) async throws {
+    /// Downloads the zip, verifies its build provenance, replaces the running .app via a
+    /// helper script, then quits.
+    static func install(from downloadURL: URL, version: String) async throws {
         // 1. Download zip
         var request = URLRequest(url: downloadURL, cachePolicy: .reloadIgnoringLocalCacheData)
         request.setValue("ClaudeOMeter", forHTTPHeaderField: "User-Agent")
@@ -23,6 +24,11 @@ enum UpdateInstaller {
         try? FileManager.default.removeItem(atPath: zipPath)
         try FileManager.default.moveItem(at: zipTemp, to: URL(fileURLWithPath: zipPath))
 
+        // 1a. Verify before anything touches the installed app. We are about to strip the
+        // Gatekeeper quarantine flag ourselves, so this is the only integrity check the
+        // user gets. Throwing here leaves the current install untouched.
+        try await UpdateVerifier.verify(zipAt: URL(fileURLWithPath: zipPath), version: version)
+
         // 2. Unzip
         let destDir = NSTemporaryDirectory() + "ClaudeOMeter_update"
         try? FileManager.default.removeItem(atPath: destDir)
@@ -33,15 +39,54 @@ enum UpdateInstaller {
             throw InstallError.appNotFound
         }
 
-        // 3. Write a helper script that waits for us to exit, replaces the app, and relaunches
+        // 3. Write a helper script that waits for us to exit, replaces the app, and relaunches.
+        //
+        // The destination is wherever this bundle is actually running from, not a hardcoded
+        // /Applications. scripts/install.sh installs to ~/Applications, so hardcoding left
+        // those users with a second copy in /Applications while the one they launched stayed
+        // stale, and failed outright when /Applications was not writable.
+        //
+        // The new bundle is staged alongside the destination and swapped in by rename, so a
+        // failed copy can no longer delete a working install and leave nothing behind.
+        // Under `swift run` the main bundle is a build directory rather than a .app, so fall
+        // back instead of letting the swap overwrite it.
+        let runningBundle = Bundle.main.bundleURL
+        let destPath = runningBundle.pathExtension == "app"
+            ? runningBundle.path
+            : "/Applications/ClaudeOMeter.app"
+
         let scriptPath = NSTemporaryDirectory() + "claudeometer_update.sh"
         let script = """
         #!/bin/bash
+        set -u
+        DEST="\(destPath)"
+        STAGE="$DEST.new"
+        BACKUP="$DEST.old"
+
         sleep 2
-        rm -rf "/Applications/ClaudeOMeter.app"
-        cp -R "\(newAppPath)" "/Applications/ClaudeOMeter.app"
-        xattr -dr com.apple.quarantine "/Applications/ClaudeOMeter.app" 2>/dev/null
-        open "/Applications/ClaudeOMeter.app"
+        rm -rf "$STAGE" "$BACKUP"
+
+        if ! cp -R "\(newAppPath)" "$STAGE"; then
+          rm -rf "$STAGE"
+          open "$DEST" 2>/dev/null
+          exit 1
+        fi
+        xattr -dr com.apple.quarantine "$STAGE" 2>/dev/null
+
+        if [ -e "$DEST" ] && ! mv "$DEST" "$BACKUP"; then
+          rm -rf "$STAGE"
+          open "$DEST" 2>/dev/null
+          exit 1
+        fi
+        if ! mv "$STAGE" "$DEST"; then
+          [ -e "$BACKUP" ] && mv "$BACKUP" "$DEST"
+          rm -rf "$STAGE"
+          open "$DEST" 2>/dev/null
+          exit 1
+        fi
+
+        rm -rf "$BACKUP"
+        open "$DEST"
         rm -rf "\(destDir)"
         rm -f "\(zipPath)"
         rm -- "$0"

@@ -274,7 +274,7 @@ final class UsageStore: ObservableObject {
         isInstalling = true
         Task {
             do {
-                try await UpdateInstaller.install(from: downloadURL)
+                try await UpdateInstaller.install(from: downloadURL, version: update.version)
             } catch {
                 AppLog.shared.error("update install failed: \(error)", category: "updates")
                 isInstalling = false

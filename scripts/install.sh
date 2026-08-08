@@ -33,29 +33,32 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 curl -fL --proto '=https' --tlsv1.2 --progress-bar "$DOWNLOAD_URL" -o "$TMP_DIR/$APP_NAME.zip"
 
 # The .app is ad-hoc signed, so its own signature says nothing about who built it.
-# GitHub build provenance is what actually ties this zip to a commit and workflow run
-# in $REPO. Verified opportunistically: releases published before provenance was added
-# have no attestation, and not every user has `gh`, so a failure warns rather than
-# aborts. Set CLAUDEOMETER_STRICT_VERIFY=1 to make an unverifiable download fatal.
-STRICT="${CLAUDEOMETER_STRICT_VERIFY:-0}"
-if command -v gh &>/dev/null && gh auth status &>/dev/null; then
-  echo "==> Verifying build provenance..."
-  if gh attestation verify "$TMP_DIR/$APP_NAME.zip" --repo "$REPO" &>/dev/null; then
-    echo "    Provenance verified: built by $REPO in GitHub Actions."
-  else
-    echo "    WARNING: could not verify build provenance for this download." >&2
-    echo "    Releases published before provenance was enabled have no attestation." >&2
-    if [[ "$STRICT" == "1" ]]; then
-      echo "error: CLAUDEOMETER_STRICT_VERIFY=1 and verification failed. Aborting." >&2
-      exit 1
-    fi
-  fi
-elif [[ "$STRICT" == "1" ]]; then
-  echo "error: CLAUDEOMETER_STRICT_VERIFY=1 but the GitHub CLI is unavailable or not" >&2
-  echo "       authenticated, so provenance cannot be checked. Aborting." >&2
-  exit 1
+# GitHub build provenance does: the release workflow records an attestation binding this
+# exact file digest to the commit and workflow run that produced it.
+#
+# We ask api.github.com whether such an attestation exists for this digest under $REPO.
+# That is not an offline Sigstore verification, but the trust anchor is TLS to GitHub,
+# which is already what we trust to serve the download itself. Someone who swapped the
+# release asset cannot mint a matching attestation without running the workflow in this
+# repo. It needs only curl and shasum, both of which ship with macOS, so there is nothing
+# extra for the user to install.
+echo "==> Verifying build provenance..."
+DIGEST=$(shasum -a 256 "$TMP_DIR/$APP_NAME.zip" | cut -d' ' -f1)
+ATTESTATION=$(curl -fsSL --proto '=https' --tlsv1.2 \
+  -H "Accept: application/vnd.github+json" \
+  "https://api.github.com/repos/$REPO/attestations/sha256:$DIGEST" 2>/dev/null || true)
+
+if printf '%s' "$ATTESTATION" | grep -q '"bundle"'; then
+  echo "    Verified: built by $REPO in GitHub Actions."
 else
-  echo "==> Skipping provenance check (GitHub CLI not available or not authenticated)."
+  # Releases published before provenance was enabled have no attestation, so this warns
+  # rather than aborts. Set CLAUDEOMETER_STRICT_VERIFY=1 to refuse anything unverified.
+  echo "    WARNING: no build provenance found for this download." >&2
+  echo "             Releases published before provenance was enabled have none." >&2
+  if [[ "${CLAUDEOMETER_STRICT_VERIFY:-0}" == "1" ]]; then
+    echo "error: CLAUDEOMETER_STRICT_VERIFY=1 and provenance is missing. Aborting." >&2
+    exit 1
+  fi
 fi
 
 echo "==> Extracting..."

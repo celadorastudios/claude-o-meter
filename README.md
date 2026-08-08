@@ -56,14 +56,24 @@ the quarantine flag is what gets past that.
 
 Because you are being asked to disable a safety check, you should be able to confirm the
 download is genuinely ours. Every release is published with GitHub build provenance, which
-cryptographically ties the zip to the exact commit and workflow run that produced it:
+ties the zip to the exact commit and workflow run that produced it.
+
+**The installer checks this for you, and so does the in-app updater.** Neither needs any
+tooling you do not already have, just `curl` and `shasum` on the command line and the
+system frameworks in the app. If you want the install to abort rather than warn when
+provenance is missing, run it with `CLAUDEOMETER_STRICT_VERIFY=1`.
+
+To check a manual download yourself:
 
 ```bash
-gh attestation verify ClaudeOMeter.zip --repo celadorastudios/claude-o-meter
+shasum -a 256 ClaudeOMeter.zip                     # note the digest
+curl -s https://api.github.com/repos/celadorastudios/claude-o-meter/attestations/sha256:<digest>
 ```
 
-The installer runs this automatically when the GitHub CLI is available. To refuse to install
-anything that fails the check, run it with `CLAUDEOMETER_STRICT_VERIFY=1`.
+A response containing an attestation bundle means GitHub confirms that file came out of
+this repository's release workflow. If you have the GitHub CLI, `gh attestation verify
+ClaudeOMeter.zip --repo celadorastudios/claude-o-meter` does the full offline cryptographic
+check instead, but it is not required.
 
 ---
 
