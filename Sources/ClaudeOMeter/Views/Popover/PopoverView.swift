@@ -454,6 +454,33 @@ struct PopoverView: View {
                                 .foregroundStyle(Color.accentColor)
                         }
                         .id("available")
+                    } else if let failure = store.updateInstallFailure {
+                        // A blocked update is the one moment the verification work has to
+                        // actually speak. Silently opening the Releases page reads as a
+                        // flaky updater and invites a manual download of the very file
+                        // that failed the check.
+                        HStack(alignment: .top, spacing: 6) {
+                            Image(systemName: failure.isSecurityFailure
+                                  ? "exclamationmark.shield.fill" : "exclamationmark.triangle.fill")
+                                .foregroundStyle(failure.isSecurityFailure ? .red : .orange)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(failure.message)
+                                    .font(.system(size: 11))
+                                    .fixedSize(horizontal: false, vertical: true)
+                                HStack(spacing: 10) {
+                                    Button("Try again") {
+                                        store.clearUpdateInstallFailure()
+                                        store.forceCheckForUpdate()
+                                    }
+                                    .font(.system(size: 11))
+                                    Button("Dismiss") { store.clearUpdateInstallFailure() }
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(.secondary)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .id("installfailed")
                     } else if store.isCheckingForUpdate {
                         HStack(spacing: 6) {
                             SpinningIcon(systemName: "arrow.clockwise", size: 11)

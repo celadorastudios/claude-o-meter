@@ -53,7 +53,8 @@ enum UpdateInstaller {
         let script = helperScript(destPath: installDestination(),
                                   newAppPath: newAppPath,
                                   destDir: destDir,
-                                  zipPath: zipPath)
+                                  zipPath: zipPath,
+                                  quittingPID: ProcessInfo.processInfo.processIdentifier)
         let scriptPath = NSTemporaryDirectory() + "claudeometer_update.sh"
         try script.write(toFile: scriptPath, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptPath)
@@ -87,7 +88,11 @@ enum UpdateInstaller {
     /// The new bundle is staged beside the destination and swapped in by rename, so a failed
     /// copy can no longer delete a working install and leave nothing behind. Every failure
     /// path restores what was there and relaunches it.
-    static func helperScript(destPath: String, newAppPath: String, destDir: String, zipPath: String) -> String {
+    static func helperScript(destPath: String,
+                             newAppPath: String,
+                             destDir: String,
+                             zipPath: String,
+                             quittingPID: Int32 = 0) -> String {
         """
         #!/bin/bash
         set -u
@@ -119,7 +124,18 @@ enum UpdateInstaller {
         STAGE="$DEST.new"
         BACKUP="$DEST.old"
 
-        sleep "${CLAUDEOMETER_UPDATE_DELAY:-2}"
+        # Wait for the app to actually exit. A fixed sleep races a slow shutdown and would
+        # swap the bundle out from under a live process, which then relaunches as a second
+        # instance. Polling the pid is deterministic; the timeout only bounds the wait.
+        PID=\(quittingPID)
+        WAITED=0
+        LIMIT="${CLAUDEOMETER_EXIT_TIMEOUT:-30}"
+        while [ "$PID" -gt 0 ] && kill -0 "$PID" 2>/dev/null && [ "$WAITED" -lt "$LIMIT" ]; do
+          sleep 1
+          WAITED=$((WAITED + 1))
+        done
+        sleep "${CLAUDEOMETER_UPDATE_DELAY:-1}"
+
         safe_rm "$STAGE"
         safe_rm "$BACKUP"
 
@@ -142,8 +158,33 @@ enum UpdateInstaller {
           exit 1
         fi
 
-        safe_rm "$BACKUP"
+        # Keep the previous version until the new one proves it can start. Discarding it
+        # first meant a build that crashed on launch left no way back at all, with the
+        # working copy already deleted.
         open "$DEST"
+
+        STARTED=0
+        WAITED=0
+        LIMIT="${CLAUDEOMETER_LAUNCH_TIMEOUT:-20}"
+        while [ "$WAITED" -lt "$LIMIT" ]; do
+          if pgrep -x "ClaudeOMeter" >/dev/null 2>&1; then STARTED=1; break; fi
+          sleep 1
+          WAITED=$((WAITED + 1))
+        done
+
+        if [ "$STARTED" -eq 1 ]; then
+          safe_rm "$BACKUP"
+        elif [ -d "$BACKUP" ]; then
+          # Roll back. The broken bundle is moved aside first, so a failure here still
+          # leaves the new copy in place rather than nothing at all.
+          echo "new version did not start; restoring the previous one" >&2
+          safe_rm "$DEST.failed"
+          if mv "$DEST" "$DEST.failed" 2>/dev/null && mv "$BACKUP" "$DEST"; then
+            safe_rm "$DEST.failed"
+            open "$DEST"
+          fi
+        fi
+
         safe_rm "\(destDir)"
         [ -n "\(zipPath)" ] && rm -f "\(zipPath)"
         rm -- "$0"

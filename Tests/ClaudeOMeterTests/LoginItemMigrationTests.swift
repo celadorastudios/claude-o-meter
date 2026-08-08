@@ -102,6 +102,47 @@ final class LoginItemMigrationTests: XCTestCase {
         }
     }
 
+    // MARK: - Classifying the launch
+
+    func testFirstRunIsClassifiedAsSuch() {
+        XCTAssertEqual(LoginItemManager.launchContext(lastPath: "", currentPath: new,
+                                                      lastVersion: "", currentVersion: "0.12.1"),
+                       .firstRun)
+    }
+
+    func testSamePathAndVersionIsAnOrdinaryRelaunch() {
+        XCTAssertEqual(LoginItemManager.launchContext(lastPath: new, currentPath: new,
+                                                      lastVersion: "0.12.1", currentVersion: "0.12.1"),
+                       .unchanged)
+    }
+
+    /// The case the version signal exists for. An in-place update replaces the bundle
+    /// without moving it, so without this it is indistinguishable from an ordinary
+    /// relaunch — and a registration dropped by the swap would be recorded as the user
+    /// having switched it off, permanently, on every update.
+    func testSamePathWithANewVersionIsAnInPlaceUpdate() {
+        XCTAssertEqual(LoginItemManager.launchContext(lastPath: new, currentPath: new,
+                                                      lastVersion: "0.12.0", currentVersion: "0.12.1"),
+                       .updatedInPlace)
+    }
+
+    func testADifferentPathIsAMoveWhateverTheVersion() {
+        XCTAssertEqual(LoginItemManager.launchContext(lastPath: old, currentPath: new,
+                                                      lastVersion: "0.12.1", currentVersion: "0.12.1"),
+                       .moved)
+        XCTAssertEqual(LoginItemManager.launchContext(lastPath: old, currentPath: new,
+                                                      lastVersion: "0.12.0", currentVersion: "0.12.1"),
+                       .moved)
+    }
+
+    /// Upgrading from a build that never recorded a version must not read as an in-place
+    /// update on the very first launch, or every existing user would be treated as one.
+    func testMissingRecordedVersionWithNoPathIsStillFirstRun() {
+        XCTAssertEqual(LoginItemManager.launchContext(lastPath: "", currentPath: new,
+                                                      lastVersion: "", currentVersion: "0.12.1"),
+                       .firstRun)
+    }
+
     // MARK: - Committing the new location
 
     /// Recording the path is what tells the next launch the move is handled, so it must

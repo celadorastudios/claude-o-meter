@@ -14,10 +14,55 @@ final class UsageStore: ObservableObject {
         case available(String)  // version string
     }
 
+    /// Why an install did not happen, in the user's terms.
+    ///
+    /// The distinction is the whole point of verifying at all. "This file is not what we
+    /// published" and "we could not check" call for different reactions, and reporting
+    /// both as a generic failure wastes the check: someone told only that the update
+    /// failed will reasonably assume the updater is flaky and go download it by hand,
+    /// which is the one thing they must not do when provenance is actually missing.
+    enum UpdateInstallFailure: Equatable {
+        case unverified(String)    // GitHub holds no attestation for this download
+        case unverifiable(String)  // could not reach GitHub to check
+        case failed(String)        // download, unzip, or the swap itself
+
+        var message: String {
+            switch self {
+            case .unverified(let version):
+                return "Update to \(version) was blocked: this download is not the file "
+                     + "we published. Do not install it manually."
+            case .unverifiable(let version):
+                return "Couldn't verify update \(version). This doesn't mean the download "
+                     + "is unsafe, only that GitHub couldn't be reached to check. Try again."
+            case .failed(let version):
+                return "Update to \(version) couldn't be installed. Your current version is "
+                     + "unchanged."
+            }
+        }
+
+        /// Only a definitively bad artifact warrants alarming the user.
+        var isSecurityFailure: Bool {
+            if case .unverified = self { return true }
+            return false
+        }
+
+        /// Maps an install error onto what the user needs to know.
+        static func from(_ error: Error, version: String) -> UpdateInstallFailure {
+            guard let verification = error as? UpdateVerifier.VerificationError else {
+                return .failed(version)
+            }
+            switch verification {
+            case .notAttested:    return .unverified(version)
+            case .couldNotVerify: return .unverifiable(version)
+            }
+        }
+    }
+
     @Published private(set) var availableUpdate: UpdateChecker.UpdateInfo?
     @Published private(set) var isInstalling = false
     @Published private(set) var isCheckingForUpdate = false
     @Published private(set) var updateCheckOutcome: UpdateCheckOutcome?
+    @Published private(set) var updateInstallFailure: UpdateInstallFailure?
     @Published var settings: AlertSettings {
         didSet { applySettingsChange(from: oldValue) }
     }
@@ -87,23 +132,35 @@ final class UsageStore: ObservableObject {
 
         let manager = LoginItemManager.shared
         let currentPath = LoginItemManager.normalizedPath(bundleURL)
+        let currentVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
         let previousPath = snapshot.lastBundlePath
         var intent = snapshot.launchAtLogin
 
-        if previousPath.isEmpty {
-            // First launch that records a path: adopt the system's answer as intent.
+        let context = LoginItemManager.launchContext(lastPath: previousPath,
+                                                     currentPath: currentPath,
+                                                     lastVersion: snapshot.lastVersion,
+                                                     currentVersion: currentVersion)
+
+        switch context {
+        case .firstRun:
+            // Nothing recorded to reason from, so adopt the system's answer as intent.
             //
             // Known limit: a user whose first launch of this build is already *after* a
             // move has nothing to adopt, because the registration was lost before this
             // code ever ran. They are seeded off and re-enable once from the toggle,
             // which reads live status so it shows the truth.
             intent = manager.isEnabled
-        } else if previousPath == currentPath {
-            // Same location, so the system is authoritative: an "off" here is the user's
-            // own choice in System Settings. Record it, otherwise a stale "on" would sit
-            // in storage and resurrect the setting at some unrelated later move.
+
+        case .unchanged:
+            // Same bundle, same version, so the system is authoritative: an "off" here is
+            // the user's own choice in System Settings. Record it, otherwise a stale "on"
+            // would sit in storage and resurrect the setting at some unrelated later move.
             intent = manager.isEnabled
-        } else {
+
+        case .moved, .updatedInPlace:
+            // The bundle is not the one the registration was made against, so a system
+            // "off" says nothing about what the user wants. Restore their intent instead
+            // of reading the change as a decision.
             manager.reconcileAfterMove(intendedEnabled: intent,
                                        lastBundlePath: previousPath,
                                        currentBundlePath: currentPath)
@@ -120,9 +177,18 @@ final class UsageStore: ObservableObject {
             snapshot.launchAtLogin = intent
             changed = true
         }
-        if recordPath, snapshot.lastBundlePath != currentPath {
-            snapshot.lastBundlePath = currentPath
-            changed = true
+        if recordPath {
+            // Path and version advance together: both describe the bundle the current
+            // registration belongs to, so committing one without the other would leave
+            // the next launch misclassifying this one.
+            if snapshot.lastBundlePath != currentPath {
+                snapshot.lastBundlePath = currentPath
+                changed = true
+            }
+            if snapshot.lastVersion != currentVersion {
+                snapshot.lastVersion = currentVersion
+                changed = true
+            }
         }
         guard changed else { return }
         Persistence.save(snapshot)
@@ -340,15 +406,30 @@ final class UsageStore: ObservableObject {
             return
         }
         isInstalling = true
+        updateInstallFailure = nil
         Task {
             do {
                 try await UpdateInstaller.install(from: downloadURL, version: update.version)
             } catch {
                 AppLog.shared.error("update install failed: \(error)", category: "updates")
                 isInstalling = false
-                UpdateChecker.openReleasesPage()
+
+                let failure = UpdateInstallFailure.from(error, version: update.version)
+                updateInstallFailure = failure
+
+                // Only send them to Releases when downloading it by hand is actually the
+                // right next step. For a download that failed verification it is the
+                // opposite of the right step, so the message stands on its own.
+                if !failure.isSecurityFailure {
+                    UpdateChecker.openReleasesPage()
+                }
             }
         }
+    }
+
+    /// Clears a reported install failure, e.g. when the user retries or dismisses it.
+    func clearUpdateInstallFailure() {
+        updateInstallFailure = nil
     }
 
     func forceCheckForUpdate() {

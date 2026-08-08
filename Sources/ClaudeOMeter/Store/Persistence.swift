@@ -50,9 +50,13 @@ enum Persistence {
         /// app changes location. Recording what the user asked for lets us restore it.
         var launchAtLogin: Bool = false
         /// Where the app was running from at last launch. A change means the bundle moved,
-        /// which is the only case where a lost login-item registration is an accident
+        /// which is one of the cases where a lost login-item registration is an accident
         /// rather than the user's choice. Empty on the first launch that tracks it.
         var lastBundlePath: String = ""
+        /// The version that ran last. An in-place update replaces the bundle without
+        /// changing its path, so this is the only signal that distinguishes "the bundle
+        /// was swapped underneath the registration" from "the user switched it off".
+        var lastVersion: String = ""
 
         init() {}
 
@@ -72,10 +76,11 @@ enum Persistence {
             todayConcurrency   = (try? c.decode(ConcurrencyStats.self,  forKey: .todayConcurrency))   ?? ConcurrencyStats()
             launchAtLogin      = (try? c.decode(Bool.self,              forKey: .launchAtLogin))      ?? false
             lastBundlePath     = (try? c.decode(String.self,            forKey: .lastBundlePath))     ?? ""
+            lastVersion        = (try? c.decode(String.self,            forKey: .lastVersion))        ?? ""
         }
         private enum CodingKeys: String, CodingKey {
             case scanState, aggregates, settings, lastAlertDay, lastTipDay, pricingVersion, dataVersion, todayConcurrency
-            case launchAtLogin, lastBundlePath
+            case launchAtLogin, lastBundlePath, lastVersion
         }
     }
 

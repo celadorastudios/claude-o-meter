@@ -31,6 +31,36 @@ final class LoginItemManager {
 
     // MARK: - Migration across a bundle move
 
+    /// Why the login item might need attention on this launch.
+    enum LaunchContext: Equatable {
+        /// Nothing recorded yet; there is no history to reason from.
+        case firstRun
+        /// Same bundle, same version. The system's answer is the user's own choice.
+        case unchanged
+        /// The bundle was replaced in place by an update.
+        case updatedInPlace
+        /// The app is running from a different location than last time.
+        case moved
+    }
+
+    /// Classifies a launch from what was recorded last time.
+    ///
+    /// `moved` and `updatedInPlace` are separated from `unchanged` because only the last
+    /// of those licenses treating a system "off" as deliberate. An in-place update
+    /// replaces the bundle without changing its path, so without the version signal it is
+    /// indistinguishable from an ordinary relaunch — and if replacing a bundle drops its
+    /// registration, every update would be silently recorded as "the user turned this
+    /// off", permanently, for everyone.
+    static func launchContext(lastPath: String,
+                              currentPath: String,
+                              lastVersion: String,
+                              currentVersion: String) -> LaunchContext {
+        guard !lastPath.isEmpty else { return .firstRun }
+        if lastPath != currentPath { return .moved }
+        if lastVersion != currentVersion { return .updatedInPlace }
+        return .unchanged
+    }
+
     /// Whether the login-item registration has to be recreated for the bundle we are
     /// running from now.
     ///
