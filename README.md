@@ -60,8 +60,22 @@ ties the zip to the exact commit and workflow run that produced it.
 
 **The installer checks this for you, and so does the in-app updater.** Neither needs any
 tooling you do not already have, just `curl` and `shasum` on the command line and the
-system frameworks in the app. If you want the install to abort rather than warn when
-provenance is missing, run it with `CLAUDEOMETER_STRICT_VERIFY=1`.
+system frameworks in the app.
+
+The check is required, not advisory: if provenance cannot be confirmed, nothing is
+installed and your existing copy is left untouched. Two different failures are reported
+separately, because they mean different things.
+
+| What you see | What it means |
+| --- | --- |
+| `no build provenance found` | GitHub answered, and it holds no attestation for this file. Either it did not come from this repository's release workflow, or it was modified afterwards. Do not run it. |
+| `could not reach GitHub to verify` | The check could not be completed (offline, rate limited, or an outage). This says nothing about the file itself. Retry. |
+
+The second case still refuses to install, which is deliberate. Anyone able to substitute
+the release asset is also able to block `api.github.com`, so treating an unreachable API
+as a pass would hand the exact adversary this check exists to stop a one-host bypass. If
+you understand that and need to proceed anyway during an outage, set
+`CLAUDEOMETER_INSECURE=1`.
 
 To check a manual download yourself:
 

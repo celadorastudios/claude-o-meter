@@ -13,28 +13,63 @@ import CryptoKit
 /// GitHub, which is already what we trust to serve the download. Someone who swapped the
 /// release asset cannot mint a matching attestation without running the workflow in this
 /// repo. It uses only URLSession and CryptoKit, so the user installs no extra tooling.
+///
+/// Verification is unconditional. There is deliberately no "this version predates
+/// provenance" exemption: the first release carrying this code is also the first release
+/// carrying provenance, so such a branch could never fire in the wild, and a version-keyed
+/// way to skip a security check is worth more to an attacker than it is to us.
 enum UpdateVerifier {
     enum VerificationError: Error, CustomStringConvertible {
-        case notAttested(version: String)
+        /// GitHub answered, and the answer was that no attestation exists for this file.
+        case notAttested(version: String, digest: String)
+        /// GitHub could not be reached or did not give a usable answer. Distinct from
+        /// `notAttested` because it says nothing about the file, only about the check.
+        case couldNotVerify(version: String, digest: String)
 
         var description: String {
             switch self {
-            case .notAttested(let version):
-                return "release \(version) has no GitHub build provenance"
+            case .notAttested(let version, let digest):
+                return "release \(version) has no GitHub build provenance (sha256:\(digest))"
+            case .couldNotVerify(let version, let digest):
+                return "could not reach GitHub to verify release \(version) (sha256:\(digest))"
             }
         }
     }
 
-    /// Releases from this version onward are produced by a workflow that records
-    /// provenance, so anything at or above it must verify. Earlier releases predate
-    /// attestation and are allowed through, otherwise existing users could never update.
+    /// What the attestations endpoint told us.
     ///
-    /// A forged release cannot use that exemption to opt out. `UpdateChecker` only offers
-    /// an update whose version is higher than the one running, so any version high enough
-    /// to be offered at all is also high enough to require attestation.
-    static let firstAttestedVersion = "0.12.0"
+    /// `unattested` and `indeterminate` are kept apart on purpose. Both block an install,
+    /// but only the first is a statement about the file; the second is a statement about
+    /// the network. Collapsing them produces an alarming, wrong message during an outage.
+    enum Outcome: Equatable {
+        /// GitHub holds at least one provenance attestation for this digest.
+        case attested
+        /// GitHub answered definitively: no attestation for this digest.
+        case unattested
+        /// No usable answer: transport failure, rate limit, 5xx, or an unparseable body.
+        case indeterminate
+    }
 
     private static let repo = "celadorastudios/claude-o-meter"
+
+    /// Performs one request and reports `(statusCode, body)`, or nil on transport failure.
+    /// Injectable so every branch below is testable without touching the network.
+    typealias Fetcher = @Sendable (URL) async -> (statusCode: Int, body: Data)?
+
+    static let defaultFetch: Fetcher = { url in
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData)
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("ClaudeOMeter", forHTTPHeaderField: "User-Agent")
+        request.timeoutInterval = 20
+
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              let http = response as? HTTPURLResponse else {
+            return nil
+        }
+        return (http.statusCode, data)
+    }
+
+    // MARK: - Digest
 
     /// Streams the file so a large artifact never has to be held in memory at once.
     static func sha256(ofFileAt url: URL) throws -> String {
@@ -48,60 +83,100 @@ enum UpdateVerifier {
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
-    /// True when GitHub holds at least one provenance attestation for this digest
-    /// under `repo`. A network failure returns false rather than throwing, so the
-    /// caller decides whether that is fatal.
-    static func isAttested(digest: String) async -> Bool {
-        guard let url = URL(string: "https://api.github.com/repos/\(repo)/attestations/sha256:\(digest)") else {
-            return false
-        }
+    // MARK: - Response handling
 
-        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData)
-        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        request.setValue("ClaudeOMeter", forHTTPHeaderField: "User-Agent")
-
-        // A digest GitHub has never attested returns 404, not an empty list, so anything
-        // other than a 200 carrying at least one attestation counts as unverified.
-        guard let (data, response) = try? await URLSession.shared.data(for: request),
-              (response as? HTTPURLResponse)?.statusCode == 200 else {
-            return false
-        }
-        return hasAttestation(inResponseBody: data)
-    }
-
-    /// Parses the attestations endpoint payload. Split out from the network call so the
-    /// response shapes GitHub actually returns can be tested directly.
-    static func hasAttestation(inResponseBody data: Data) -> Bool {
+    /// Number of attestations in the payload, or nil when the body cannot be understood
+    /// at all. The nil case matters: a captive portal or intercepting proxy answering 200
+    /// with HTML is a failed check, not a file that lacks provenance.
+    static func parseAttestationCount(_ data: Data) -> Int? {
         guard let payload = try? JSONDecoder().decode(AttestationResponse.self, from: data) else {
-            return false
+            return nil
         }
-        return !(payload.attestations ?? []).isEmpty
+        return (payload.attestations ?? []).count
     }
 
-    /// True when `version` is at or above `firstAttestedVersion` and so must verify.
-    /// `isNewer(a, than: b)` is `a > b`, so negating it gives `version >= threshold`.
-    static func requiresAttestation(version: String) -> Bool {
-        !UpdateChecker.isNewer(firstAttestedVersion, than: version)
+    /// Convenience over `parseAttestationCount` for callers that only need a yes/no.
+    /// An unreadable body reads as "no", so this can never spoof a pass.
+    static func hasAttestation(inResponseBody data: Data) -> Bool {
+        (parseAttestationCount(data) ?? 0) > 0
     }
 
-    /// Throws when `version` is expected to carry provenance but none is present.
-    static func verify(zipAt url: URL, version: String) async throws {
-        let attestationRequired = requiresAttestation(version: version)
+    /// Maps one HTTP response onto an `Outcome`. Pure, so the whole decision table is
+    /// testable directly.
+    ///
+    /// 404 is the documented, verified answer for a digest GitHub has never attested, so
+    /// it is definitive. Everything else that is not a usable 200 (403 rate limit, 5xx,
+    /// redirects, an unreadable body) means the check did not happen.
+    static func classify(statusCode: Int, body: Data) -> Outcome {
+        switch statusCode {
+        case 200:
+            guard let count = parseAttestationCount(body) else { return .indeterminate }
+            return count > 0 ? .attested : .unattested
+        case 404:
+            return .unattested
+        default:
+            return .indeterminate
+        }
+    }
 
+    /// Asks GitHub about `digest`, retrying only when the answer was indeterminate.
+    ///
+    /// A definitive answer is never retried: retrying a 404 just delays the inevitable,
+    /// and retrying a 200 would be pointless. Retries exist for the outage case, which is
+    /// the only one that might resolve itself.
+    static func attestationOutcome(digest: String,
+                                   attempts: Int = 3,
+                                   retryDelay: Duration = .seconds(2),
+                                   fetch: Fetcher = defaultFetch) async -> Outcome {
+        guard let url = URL(string: "https://api.github.com/repos/\(repo)/attestations/sha256:\(digest)") else {
+            return .indeterminate
+        }
+
+        let total = max(1, attempts)
+        for attempt in 1...total {
+            if let (status, body) = await fetch(url) {
+                let outcome = classify(statusCode: status, body: body)
+                if outcome != .indeterminate { return outcome }
+            }
+            if attempt < total {
+                try? await Task.sleep(for: retryDelay * attempt)
+            }
+        }
+        return .indeterminate
+    }
+
+    // MARK: - Verification
+
+    /// Throws unless GitHub confirms provenance for this exact file.
+    ///
+    /// Fails closed on an indeterminate result. That is deliberate: anyone able to swap
+    /// the release asset is also able to drop packets to api.github.com, so treating an
+    /// unreachable API as a pass would let the same adversary the check exists to stop
+    /// bypass it by blocking one host.
+    static func verify(zipAt url: URL,
+                       version: String,
+                       attempts: Int = 3,
+                       retryDelay: Duration = .seconds(2),
+                       fetch: Fetcher = defaultFetch) async throws {
         let digest = try sha256(ofFileAt: url)
-        if await isAttested(digest: digest) {
-            AppLog.shared.info("update \(version): build provenance verified", category: "updates")
-            return
-        }
 
-        guard attestationRequired else {
-            AppLog.shared.info("update \(version) predates build provenance; installing unverified",
-                               category: "updates")
-            return
+        switch await attestationOutcome(digest: digest,
+                                        attempts: attempts,
+                                        retryDelay: retryDelay,
+                                        fetch: fetch) {
+        case .attested:
+            AppLog.shared.info("update \(version): build provenance verified", category: "updates")
+
+        case .unattested:
+            AppLog.shared.error("update \(version): no build provenance for sha256:\(digest); refusing to install",
+                                category: "updates")
+            throw VerificationError.notAttested(version: version, digest: digest)
+
+        case .indeterminate:
+            AppLog.shared.error("update \(version): could not reach GitHub to check provenance for sha256:\(digest); refusing to install",
+                                category: "updates")
+            throw VerificationError.couldNotVerify(version: version, digest: digest)
         }
-        AppLog.shared.error("update \(version): no build provenance for sha256:\(digest); refusing to install",
-                            category: "updates")
-        throw VerificationError.notAttested(version: version)
     }
 
     /// Only the presence and count of attestations matters, so the entries stay opaque.

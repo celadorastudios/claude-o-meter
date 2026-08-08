@@ -14,6 +14,10 @@ swift test                     # all tests
 swift run                      # dev run (Dock icon visible — useful for iteration)
 ./scripts/build_app.sh         # build distributable .app (no Dock icon, ad-hoc signed)
 open dist/ClaudeOMeter.app
+
+./scripts/tests/install_test.sh        # hermetic tests for scripts/install.sh
+./scripts/tests/check_secrets_test.sh  # proves the secret/PII scanner still matches
+node scripts/check-secrets.mjs         # scan the working tree for secrets and PII
 ```
 
 ## Architecture
