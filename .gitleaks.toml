@@ -1,0 +1,28 @@
+# gitleaks config for claude-o-meter
+#
+# The default ruleset is kept in full; this only records the handful of values that are
+# fixtures or public by design, so a real leak is never lost in the noise of the same few
+# false positives on every run.
+#
+# The bar for adding an entry: the value must be one that is meant to be read by anyone,
+# or a deliberately fake fixture. If it grants any read, write or admin access to
+# something real, it does not belong here, it belongs rotated.
+
+title = "claude-o-meter"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Test fixtures and deliberately public values"
+paths = [
+  # Plants fake credentials on purpose, to prove scripts/check-secrets.mjs still matches
+  # them. Every value in this file is synthetic; see the file header.
+  '''scripts/tests/check_secrets_test\.sh''',
+
+  # Documents the detection patterns themselves rather than any real value.
+  '''scripts/check-secrets\.mjs''',
+
+  # SwiftPM pins are content hashes that look like secrets and are not.
+  '''Package\.resolved''',
+]
