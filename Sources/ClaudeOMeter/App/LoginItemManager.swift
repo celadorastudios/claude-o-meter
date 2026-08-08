@@ -58,6 +58,17 @@ final class LoginItemManager {
         return lastBundlePath != currentBundlePath
     }
 
+    /// Whether this bundle location is one worth tracking and registering.
+    ///
+    /// Under `swift run` the main bundle is a build directory rather than a `.app`.
+    /// `SMAppService` is meaningless there, and recording that path would overwrite the
+    /// real install location, making the next genuine launch look like a move (and
+    /// masking a real one). Same guard, for the same reason, as
+    /// `UpdateInstaller.installDestination`.
+    static func isRegistrableBundle(_ bundleURL: URL) -> Bool {
+        bundleURL.pathExtension == "app"
+    }
+
     /// Applies `shouldReRegister` and returns whether a re-registration was performed.
     @discardableResult
     func reconcileAfterMove(intendedEnabled: Bool,

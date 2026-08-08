@@ -85,6 +85,23 @@ final class LoginItemMigrationTests: XCTestCase {
                                                         currentBundlePath: old))
     }
 
+    // MARK: - Which bundles are worth tracking
+
+    /// Under `swift run` the main bundle is a build directory. Recording that path would
+    /// overwrite the real install location and make the next genuine launch look like a
+    /// move, so dev runs must be ignored entirely.
+    func testOnlyAppBundlesAreTracked() {
+        XCTAssertTrue(LoginItemManager.isRegistrableBundle(URL(fileURLWithPath: new)))
+        XCTAssertTrue(LoginItemManager.isRegistrableBundle(URL(fileURLWithPath: old)))
+
+        for dev in ["/Users/me/proj/.build/arm64-apple-macosx/debug",
+                    "/Users/me/proj/.build/release",
+                    "/usr/local/bin"] {
+            XCTAssertFalse(LoginItemManager.isRegistrableBundle(URL(fileURLWithPath: dev)),
+                           "\(dev) is not an app bundle and must not be tracked")
+        }
+    }
+
     // MARK: - Persistence of the intent
 
     /// The setting is only restorable if it is actually written down, and it has to

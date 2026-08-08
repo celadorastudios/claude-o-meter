@@ -78,7 +78,12 @@ final class UsageStore: ObservableObject {
     /// directory when they reinstall, which would otherwise silently turn their setting
     /// off. See `LoginItemManager.shouldReRegister` for why this only acts on a move.
     private func reconcileLoginItem() {
-        let currentPath = Bundle.main.bundleURL.path
+        // Under `swift run` the main bundle is a build directory, not a .app. Recording
+        // that path would overwrite the real install location and make the next genuine
+        // launch look like a move.
+        let bundleURL = Bundle.main.bundleURL
+        guard LoginItemManager.isRegistrableBundle(bundleURL) else { return }
+        let currentPath = bundleURL.path
 
         // First launch that records a path: adopt the system's current answer as intent,
         // otherwise an existing user's enabled setting would read as "never wanted it"
