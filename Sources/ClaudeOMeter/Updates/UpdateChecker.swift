@@ -2,10 +2,10 @@ import Foundation
 import AppKit
 
 enum UpdateChecker {
-    static let projectPageURL  = URL(string: "https://github.com/Deklin/claude-o-meter")!
-    static let releasesPageURL = URL(string: "https://github.com/Deklin/claude-o-meter/releases")!
+    static let projectPageURL  = URL(string: "https://github.com/celadorastudios/claude-o-meter")!
+    static let releasesPageURL = URL(string: "https://github.com/celadorastudios/claude-o-meter/releases")!
 
-    private static let apiURL = URL(string: "https://api.github.com/repos/Deklin/claude-o-meter/releases/latest")!
+    private static let apiURL = URL(string: "https://api.github.com/repos/celadorastudios/claude-o-meter/releases/latest")!
 
     struct UpdateInfo {
         let version: String

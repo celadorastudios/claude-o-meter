@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # One-line installer for Claude-o-Meter.
-# Usage: curl -fsSL https://raw.githubusercontent.com/Deklin/claude-o-meter/master/scripts/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/celadorastudios/claude-o-meter/master/scripts/install.sh | bash
 set -euo pipefail
 
-REPO="Deklin/claude-o-meter"
+REPO="celadorastudios/claude-o-meter"
 APP_NAME="ClaudeOMeter"
 INSTALL_DIR="$HOME/Applications"
 MIN_MACOS=14
