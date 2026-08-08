@@ -78,4 +78,4 @@ codesign --verify --verbose "$APP"
 
 echo "==> done: $APP"
 echo "    Run:    open $APP"
-echo "    Install: cp -R $APP /Applications/"
+echo "    Install: cp -R $APP ~/Applications/"

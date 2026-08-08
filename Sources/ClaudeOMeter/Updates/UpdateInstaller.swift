@@ -73,8 +73,13 @@ enum UpdateInstaller {
     /// ~/Applications, so those users got a second copy in /Applications while the one they
     /// had launched stayed stale. Under `swift run` the main bundle is a build directory
     /// rather than a .app, so fall back instead of overwriting it.
-    static func installDestination(bundleURL: URL = Bundle.main.bundleURL) -> String {
-        bundleURL.pathExtension == "app" ? bundleURL.path : "/Applications/ClaudeOMeter.app"
+    static func installDestination(bundleURL: URL = Bundle.main.bundleURL,
+                                   home: URL = FileManager.default.homeDirectoryForCurrentUser) -> String {
+        guard bundleURL.pathExtension != "app" else { return bundleURL.path }
+        // Dev fallback only. ~/Applications rather than /Applications, matching where
+        // install.sh puts the app: it needs no admin rights, so an update can always be
+        // written without prompting for a password.
+        return home.appendingPathComponent("Applications/ClaudeOMeter.app").path
     }
 
     /// Replaces the installed bundle and relaunches it.

@@ -46,7 +46,9 @@ curl -fsSL https://raw.githubusercontent.com/celadorastudios/claude-o-meter/mast
 
 This downloads the latest release, installs it to `~/Applications/`, clears the Gatekeeper quarantine flag automatically, and launches the app. No `sudo` required.
 
-> **Manual install:** Download `ClaudeOMeter.zip` from [Releases](https://github.com/celadorastudios/claude-o-meter/releases), unzip, drag `ClaudeOMeter.app` to `~/Applications/` or `/Applications/`, then run `xattr -dr com.apple.quarantine ~/Applications/ClaudeOMeter.app` before launching.
+> **Manual install:** Download `ClaudeOMeter.zip` from [Releases](https://github.com/celadorastudios/claude-o-meter/releases), unzip, drag `ClaudeOMeter.app` to `~/Applications/`, then run `xattr -dr com.apple.quarantine ~/Applications/ClaudeOMeter.app` before launching.
+>
+> `~/Applications` is the recommended location. It needs no admin rights, so the app can update itself without ever asking for your password. `/Applications` works too, and updates follow the app wherever you put it, but writing there requires admin rights.
 
 ### Why the quarantine step is needed
 

@@ -43,10 +43,20 @@ final class UpdateInstallerTests: XCTestCase {
     }
 
     // Under `swift run` the main bundle is a build directory, which must never be swapped.
+    // The fallback is ~/Applications, matching install.sh: it needs no admin rights, so an
+    // update can always be written without prompting for a password.
     func testDestinationFallsBackWhenNotAnAppBundle() {
         let buildDir = URL(fileURLWithPath: "/Users/me/proj/.build/release")
-        XCTAssertEqual(UpdateInstaller.installDestination(bundleURL: buildDir),
-                       "/Applications/ClaudeOMeter.app")
+        let home = URL(fileURLWithPath: "/Users/me")
+        XCTAssertEqual(UpdateInstaller.installDestination(bundleURL: buildDir, home: home),
+                       "/Users/me/Applications/ClaudeOMeter.app")
+    }
+
+    // The fallback must never be the system-wide location, which needs admin rights.
+    func testFallbackIsNeverTheSystemApplicationsFolder() {
+        let buildDir = URL(fileURLWithPath: "/Users/me/proj/.build/release")
+        XCTAssertNotEqual(UpdateInstaller.installDestination(bundleURL: buildDir),
+                          "/Applications/ClaudeOMeter.app")
     }
 
     // MARK: - Swap behaviour
