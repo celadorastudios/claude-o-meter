@@ -25,3 +25,6 @@ dist/
 # Playwright MCP session artifacts + verification screenshots
 .playwright-mcp/
 verify-*.png
+
+# Stray compiled probes from local experimentation
+test_import

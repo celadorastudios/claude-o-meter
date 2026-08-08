@@ -53,7 +53,8 @@ enum UpdateInstaller {
         let script = helperScript(destPath: installDestination(),
                                   newAppPath: newAppPath,
                                   destDir: destDir,
-                                  zipPath: zipPath)
+                                  zipPath: zipPath,
+                                  quittingPID: ProcessInfo.processInfo.processIdentifier)
         let scriptPath = NSTemporaryDirectory() + "claudeometer_update.sh"
         try script.write(toFile: scriptPath, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptPath)
@@ -73,8 +74,13 @@ enum UpdateInstaller {
     /// ~/Applications, so those users got a second copy in /Applications while the one they
     /// had launched stayed stale. Under `swift run` the main bundle is a build directory
     /// rather than a .app, so fall back instead of overwriting it.
-    static func installDestination(bundleURL: URL = Bundle.main.bundleURL) -> String {
-        bundleURL.pathExtension == "app" ? bundleURL.path : "/Applications/ClaudeOMeter.app"
+    static func installDestination(bundleURL: URL = Bundle.main.bundleURL,
+                                   home: URL = FileManager.default.homeDirectoryForCurrentUser) -> String {
+        guard bundleURL.pathExtension != "app" else { return bundleURL.path }
+        // Dev fallback only. ~/Applications rather than /Applications, matching where
+        // install.sh puts the app: it needs no admin rights, so an update can always be
+        // written without prompting for a password.
+        return home.appendingPathComponent("Applications/ClaudeOMeter.app").path
     }
 
     /// Replaces the installed bundle and relaunches it.
@@ -82,7 +88,11 @@ enum UpdateInstaller {
     /// The new bundle is staged beside the destination and swapped in by rename, so a failed
     /// copy can no longer delete a working install and leave nothing behind. Every failure
     /// path restores what was there and relaunches it.
-    static func helperScript(destPath: String, newAppPath: String, destDir: String, zipPath: String) -> String {
+    static func helperScript(destPath: String,
+                             newAppPath: String,
+                             destDir: String,
+                             zipPath: String,
+                             quittingPID: Int32 = 0) -> String {
         """
         #!/bin/bash
         set -u
@@ -114,7 +124,28 @@ enum UpdateInstaller {
         STAGE="$DEST.new"
         BACKUP="$DEST.old"
 
-        sleep "${CLAUDEOMETER_UPDATE_DELAY:-2}"
+        # Wait for the app to actually exit. A fixed sleep races a slow shutdown and would
+        # swap the bundle out from under a live process, which then relaunches as a second
+        # instance. Polling the pid is deterministic; the timeout only bounds the wait.
+        PID=\(quittingPID)
+        WAITED=0
+        LIMIT="${CLAUDEOMETER_EXIT_TIMEOUT:-30}"
+        while [ "$PID" -gt 0 ] && kill -0 "$PID" 2>/dev/null && [ "$WAITED" -lt "$LIMIT" ]; do
+          sleep 1
+          WAITED=$((WAITED + 1))
+        done
+
+        # If it never exited, do not swap the bundle out from under a live process. That
+        # would also poison the launch check below, which asks whether a ClaudeOMeter is
+        # running: the *old* one still would be, so a crashed new build would look
+        # healthy and the rollback copy would be thrown away.
+        if [ "$PID" -gt 0 ] && kill -0 "$PID" 2>/dev/null; then
+          echo "app is still running after ${LIMIT}s; leaving the current version alone" >&2
+          exit 1
+        fi
+
+        sleep "${CLAUDEOMETER_UPDATE_DELAY:-1}"
+
         safe_rm "$STAGE"
         safe_rm "$BACKUP"
 
@@ -137,8 +168,44 @@ enum UpdateInstaller {
           exit 1
         fi
 
-        safe_rm "$BACKUP"
+        # Keep the previous version until the new one proves it can start. Discarding it
+        # first meant a build that crashed on launch left no way back at all, with the
+        # working copy already deleted.
         open "$DEST"
+
+        STARTED=0
+        WAITED=0
+        LIMIT="${CLAUDEOMETER_LAUNCH_TIMEOUT:-20}"
+        # Without pgrep there is no way to tell, and rolling back a healthy install on a
+        # missing tool would be worse than skipping the check.
+        if ! command -v pgrep >/dev/null 2>&1; then
+          STARTED=1
+        fi
+        while [ "$STARTED" -eq 0 ] && [ "$WAITED" -lt "$LIMIT" ]; do
+          if pgrep -x "ClaudeOMeter" >/dev/null 2>&1; then STARTED=1; break; fi
+          sleep 1
+          WAITED=$((WAITED + 1))
+        done
+
+        if [ "$STARTED" -eq 1 ]; then
+          safe_rm "$BACKUP"
+        elif [ -d "$BACKUP" ]; then
+          # Roll back. Every branch must leave *some* working bundle at $DEST: ending up
+          # with none is the failure this whole dance exists to avoid.
+          echo "new version did not start; restoring the previous one" >&2
+          safe_rm "$DEST.failed"
+          if mv "$DEST" "$DEST.failed" 2>/dev/null; then
+            if mv "$BACKUP" "$DEST"; then
+              safe_rm "$DEST.failed"
+            else
+              # Could not put the old one back, so return the new one rather than
+              # leave the destination empty.
+              mv "$DEST.failed" "$DEST" 2>/dev/null
+            fi
+          fi
+          open "$DEST"
+        fi
+
         safe_rm "\(destDir)"
         [ -n "\(zipPath)" ] && rm -f "\(zipPath)"
         rm -- "$0"

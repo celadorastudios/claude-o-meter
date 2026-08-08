@@ -1,3 +1,4 @@
+import Foundation
 import ServiceManagement
 
 final class LoginItemManager {
@@ -26,5 +27,124 @@ final class LoginItemManager {
 
     func openSystemSettings() {
         SMAppService.openSystemSettingsLoginItems()
+    }
+
+    // MARK: - Migration across a bundle move
+
+    /// Why the login item might need attention on this launch.
+    enum LaunchContext: Equatable {
+        /// Nothing recorded yet; there is no history to reason from.
+        case firstRun
+        /// Same bundle, same version. The system's answer is the user's own choice.
+        case unchanged
+        /// The bundle was replaced in place by an update.
+        case updatedInPlace
+        /// The app is running from a different location than last time.
+        case moved
+    }
+
+    /// Classifies a launch from what was recorded last time.
+    ///
+    /// `moved` and `updatedInPlace` are separated from `unchanged` because only the last
+    /// of those licenses treating a system "off" as deliberate. An in-place update
+    /// replaces the bundle without changing its path, so without the version signal it is
+    /// indistinguishable from an ordinary relaunch — and if replacing a bundle drops its
+    /// registration, every update would be silently recorded as "the user turned this
+    /// off", permanently, for everyone.
+    static func launchContext(lastPath: String,
+                              currentPath: String,
+                              lastVersion: String,
+                              currentVersion: String) -> LaunchContext {
+        guard !lastPath.isEmpty else { return .firstRun }
+        if lastPath != currentPath { return .moved }
+        if lastVersion != currentVersion { return .updatedInPlace }
+        return .unchanged
+    }
+
+    /// Whether the login-item registration has to be recreated for the bundle we are
+    /// running from now.
+    ///
+    /// `SMAppService.mainApp` registers the *running* bundle, so a registration does not
+    /// survive the bundle being replaced or moved. Either way the app silently stops
+    /// launching at login.
+    ///
+    /// The decision is driven entirely by `LaunchContext`, which already established
+    /// whether the bundle changed. Re-deriving that here by comparing paths was a bug:
+    /// an in-place update keeps the same path, so a path comparison classified it as "no
+    /// change" and the repair never ran.
+    ///
+    /// `unchanged` deliberately does not re-register. With the same bundle still in
+    /// place, a system "off" is the user's own choice in System Settings, and overriding
+    /// it would make the app impossible to disable there.
+    ///
+    /// Pure and static so the whole decision table is testable without touching
+    /// ServiceManagement.
+    static func shouldReRegister(context: LaunchContext,
+                                 intendedEnabled: Bool,
+                                 isCurrentlyEnabled: Bool) -> Bool {
+        guard intendedEnabled, !isCurrentlyEnabled else { return false }
+        switch context {
+        case .moved, .updatedInPlace:
+            return true
+        case .firstRun, .unchanged:
+            // Nothing to migrate: no history, or the same bundle the user last decided on.
+            return false
+        }
+    }
+
+    /// Whether this bundle location is one worth tracking and registering.
+    ///
+    /// Under `swift run` the main bundle is a build directory rather than a `.app`.
+    /// `SMAppService` is meaningless there, and recording that path would overwrite the
+    /// real install location, making the next genuine launch look like a move (and
+    /// masking a real one). Same guard, for the same reason, as
+    /// `UpdateInstaller.installDestination`.
+    static func isRegistrableBundle(_ bundleURL: URL) -> Bool {
+        bundleURL.pathExtension == "app"
+    }
+
+    /// The form of a bundle path used for storage and comparison.
+    ///
+    /// The whole mechanism turns on exact string equality, so both sides have to be
+    /// normalised the same way. Without this, symlinked ancestors (`/var` resolving to
+    /// `/private/var` is the classic macOS case) or a stray trailing slash read as a move
+    /// that never happened, and could equally mask a real one.
+    static func normalizedPath(_ bundleURL: URL) -> String {
+        bundleURL.resolvingSymlinksInPath().standardizedFileURL.path
+    }
+
+    /// Whether the new location may be committed to storage yet.
+    ///
+    /// Recording the path is what tells the next launch "this move is already handled",
+    /// so it must not happen until the system actually agrees with the intent. An
+    /// ad-hoc-signed app frequently lands on `.requiresApproval` rather than `.enabled`
+    /// after `register()`, and `setEnabled` swallows a thrown error, so "we asked" is not
+    /// evidence of success. Committing regardless would make a single failed attempt
+    /// permanent: the path would match forever after, and `shouldReRegister` could never
+    /// fire again for this location.
+    static func shouldRecordNewPath(intendedEnabled: Bool, resultingIsEnabled: Bool) -> Bool {
+        // Nothing to achieve when the user does not want it on.
+        guard intendedEnabled else { return true }
+        // Otherwise only once the system agrees, so an unsuccessful attempt is retried.
+        return resultingIsEnabled
+    }
+
+    /// Applies `shouldReRegister` and returns whether a re-registration was attempted.
+    ///
+    /// A `true` result means the attempt was made, not that it succeeded: `setEnabled`
+    /// cannot report failure. Callers must re-read `isEnabled` to learn the outcome.
+    @discardableResult
+    func restoreRegistration(context: LaunchContext,
+                             intendedEnabled: Bool,
+                             detail: String) -> Bool {
+        guard Self.shouldReRegister(context: context,
+                                    intendedEnabled: intendedEnabled,
+                                    isCurrentlyEnabled: isEnabled) else {
+            return false
+        }
+
+        AppLog.shared.info("\(detail); restoring launch-at-login", category: "app")
+        setEnabled(true)
+        return true
     }
 }

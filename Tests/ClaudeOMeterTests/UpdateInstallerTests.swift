@@ -21,6 +21,16 @@ final class UpdateInstallerTests: XCTestCase {
             try "#!/bin/bash\nexit 0\n".write(to: stub, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: stub.path)
         }
+        // The script polls pgrep to confirm the new build actually started. Default to
+        // "it started" so existing cases exercise the success path.
+        try stubPgrep(found: true)
+    }
+
+    /// `pgrep -x ClaudeOMeter` decides whether the swap is committed or rolled back.
+    private func stubPgrep(found: Bool) throws {
+        let stub = stubBin.appendingPathComponent("pgrep")
+        try "#!/bin/bash\nexit \(found ? 0 : 1)\n".write(to: stub, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: stub.path)
     }
 
     override func tearDownWithError() throws {
@@ -43,10 +53,20 @@ final class UpdateInstallerTests: XCTestCase {
     }
 
     // Under `swift run` the main bundle is a build directory, which must never be swapped.
+    // The fallback is ~/Applications, matching install.sh: it needs no admin rights, so an
+    // update can always be written without prompting for a password.
     func testDestinationFallsBackWhenNotAnAppBundle() {
         let buildDir = URL(fileURLWithPath: "/Users/me/proj/.build/release")
-        XCTAssertEqual(UpdateInstaller.installDestination(bundleURL: buildDir),
-                       "/Applications/ClaudeOMeter.app")
+        let home = URL(fileURLWithPath: "/Users/me")
+        XCTAssertEqual(UpdateInstaller.installDestination(bundleURL: buildDir, home: home),
+                       "/Users/me/Applications/ClaudeOMeter.app")
+    }
+
+    // The fallback must never be the system-wide location, which needs admin rights.
+    func testFallbackIsNeverTheSystemApplicationsFolder() {
+        let buildDir = URL(fileURLWithPath: "/Users/me/proj/.build/release")
+        XCTAssertNotEqual(UpdateInstaller.installDestination(bundleURL: buildDir),
+                          "/Applications/ClaudeOMeter.app")
     }
 
     // MARK: - Swap behaviour
@@ -89,6 +109,103 @@ final class UpdateInstallerTests: XCTestCase {
         XCTAssertEqual(try marker(in: f.dest), "old")
         XCTAssertFalse(FileManager.default.fileExists(atPath: f.dest.path + ".new"),
                        "staging directory should not be left behind")
+    }
+
+    // MARK: - Rollback when the new build will not start
+
+    /// The regression this guards: the previous version used to be deleted *before* the
+    /// new one was launched, so a build that crashed on startup left no way back at all.
+    func testFailedLaunchRestoresThePreviousVersion() throws {
+        let f = try makeFixture(installedMarker: "old", stagedMarker: "new")
+        try stubPgrep(found: false)   // the new build never comes up
+
+        let result = try runHelper(f)
+
+        XCTAssertEqual(try marker(in: f.dest), "old", "the working version must be restored")
+        XCTAssertTrue(result.output.contains("did not start"), "the rollback should say why")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: f.dest.path + ".failed"),
+                       "the broken bundle should not be left beside the restored one")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: f.dest.path + ".old"))
+    }
+
+    /// The rollback copy is only discarded once the new version is confirmed running.
+    func testSuccessfulLaunchDiscardsTheRollbackCopy() throws {
+        let f = try makeFixture(installedMarker: "old", stagedMarker: "new")
+        try stubPgrep(found: true)
+
+        let result = try runHelper(f)
+
+        XCTAssertEqual(result.exitCode, 0)
+        XCTAssertEqual(try marker(in: f.dest), "new")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: f.dest.path + ".old"),
+                       "the backup should be reaped once the new version is up")
+    }
+
+    /// A first install has nothing to roll back to, so a failed launch must not error out
+    /// or leave debris.
+    func testFailedLaunchOnAFirstInstallLeavesTheNewBundleInPlace() throws {
+        let f = try makeFixture(installedMarker: nil, stagedMarker: "new")
+        try stubPgrep(found: false)
+
+        _ = try runHelper(f)
+
+        XCTAssertEqual(try marker(in: f.dest), "new", "there is no previous version to restore")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: f.dest.path + ".failed"))
+    }
+
+    /// Regression guard. `pgrep -x ClaudeOMeter` matches *any* instance, so if the old
+    /// process outlived the exit wait the script would see it, conclude the new build
+    /// started, and throw away the rollback copy. The swap now refuses to run at all
+    /// while the old process is alive, which removes that reading entirely.
+    func testRefusesToSwapWhileTheOldProcessIsStillRunning() throws {
+        let sleeper = Process()
+        sleeper.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        sleeper.arguments = ["30"]
+        try sleeper.run()
+        addTeardownBlock { sleeper.terminate() }
+
+        let f = try makeFixture(installedMarker: "old", stagedMarker: "new")
+        // Exit wait gives up quickly; the process is still alive when it does.
+        let result = try runScript(destPath: f.dest.path, fixture: f,
+                                   quittingPID: sleeper.processIdentifier,
+                                   exitTimeout: 2)
+
+        XCTAssertNotEqual(result.exitCode, 0, "should refuse rather than swap under a live app")
+        XCTAssertTrue(result.output.contains("still running"), "should say why: \(result.output)")
+        XCTAssertEqual(try marker(in: f.dest), "old", "the running install must be untouched")
+    }
+
+    // MARK: - Waiting for the old process to exit
+
+    /// A fixed sleep raced a slow shutdown and could swap the bundle under a live process,
+    /// which then relaunched as a second instance. The script now polls the pid.
+    func testScriptWaitsOnTheQuittingProcess() {
+        let script = UpdateInstaller.helperScript(destPath: "/Users/me/Applications/ClaudeOMeter.app",
+                                                  newAppPath: "/tmp/u/ClaudeOMeter.app",
+                                                  destDir: "/tmp/u",
+                                                  zipPath: "/tmp/u.zip",
+                                                  quittingPID: 4242)
+        XCTAssertTrue(script.contains("PID=4242"))
+        XCTAssertTrue(script.contains("kill -0"), "should poll the pid rather than guess")
+    }
+
+    /// A live pid must hold the swap off. Uses a real background process so the wait is
+    /// exercised rather than asserted on the script text.
+    func testSwapWaitsUntilTheProcessActuallyExits() throws {
+        let sleeper = Process()
+        sleeper.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        sleeper.arguments = ["3"]
+        try sleeper.run()
+
+        let f = try makeFixture(installedMarker: "old", stagedMarker: "new")
+        let started = Date()
+        let result = try runScript(destPath: f.dest.path, fixture: f, quittingPID: sleeper.processIdentifier)
+        let elapsed = Date().timeIntervalSince(started)
+
+        sleeper.waitUntilExit()
+        XCTAssertEqual(result.exitCode, 0)
+        XCTAssertGreaterThanOrEqual(elapsed, 2.0, "the swap should have waited for the pid to exit")
+        XCTAssertEqual(try marker(in: f.dest), "new")
     }
 
     // MARK: - Destructive-operation guards
@@ -190,11 +307,15 @@ final class UpdateInstallerTests: XCTestCase {
     }
 
     @discardableResult
-    private func runScript(destPath: String, fixture f: Fixture) throws -> (exitCode: Int32, output: String) {
+    private func runScript(destPath: String,
+                           fixture f: Fixture,
+                           quittingPID: Int32 = 0,
+                           exitTimeout: Int = 10) throws -> (exitCode: Int32, output: String) {
         let script = UpdateInstaller.helperScript(destPath: destPath,
                                                   newAppPath: f.newApp.path,
                                                   destDir: f.unpackDir.path,
-                                                  zipPath: f.zip.path)
+                                                  zipPath: f.zip.path,
+                                                  quittingPID: quittingPID)
         try script.write(to: f.scriptPath, atomically: true, encoding: .utf8)
 
         let process = Process()
@@ -203,7 +324,9 @@ final class UpdateInstallerTests: XCTestCase {
 
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = stubBin.path + ":" + (env["PATH"] ?? "/usr/bin:/bin")
-        env["CLAUDEOMETER_UPDATE_DELAY"] = "0"   // no reason to wait in tests
+        env["CLAUDEOMETER_UPDATE_DELAY"] = "0"    // no reason to wait in tests
+        env["CLAUDEOMETER_EXIT_TIMEOUT"] = String(exitTimeout)  // bounds the pid wait
+        env["CLAUDEOMETER_LAUNCH_TIMEOUT"] = "2"  // keeps the rollback case quick
         process.environment = env
 
         let pipe = Pipe()

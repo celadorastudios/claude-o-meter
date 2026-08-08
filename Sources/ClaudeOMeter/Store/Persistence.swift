@@ -45,6 +45,19 @@ enum Persistence {
         var dataVersion: Int = 0
         var todayConcurrency: ConcurrencyStats = ConcurrencyStats()
 
+        /// The user's launch-at-login *intent*, as opposed to the current system state.
+        /// `SMAppService` registers the running bundle, so its answer is lost whenever the
+        /// app changes location. Recording what the user asked for lets us restore it.
+        var launchAtLogin: Bool = false
+        /// Where the app was running from at last launch. A change means the bundle moved,
+        /// which is one of the cases where a lost login-item registration is an accident
+        /// rather than the user's choice. Empty on the first launch that tracks it.
+        var lastBundlePath: String = ""
+        /// The version that ran last. An in-place update replaces the bundle without
+        /// changing its path, so this is the only signal that distinguishes "the bundle
+        /// was swapped underneath the registration" from "the user switched it off".
+        var lastVersion: String = ""
+
         init() {}
 
         // Defensive decoder: each field falls back to its default on missing key or type
@@ -61,9 +74,13 @@ enum Persistence {
             pricingVersion     = (try? c.decode(Int.self,               forKey: .pricingVersion))     ?? 0
             dataVersion        = (try? c.decode(Int.self,               forKey: .dataVersion))        ?? 0
             todayConcurrency   = (try? c.decode(ConcurrencyStats.self,  forKey: .todayConcurrency))   ?? ConcurrencyStats()
+            launchAtLogin      = (try? c.decode(Bool.self,              forKey: .launchAtLogin))      ?? false
+            lastBundlePath     = (try? c.decode(String.self,            forKey: .lastBundlePath))     ?? ""
+            lastVersion        = (try? c.decode(String.self,            forKey: .lastVersion))        ?? ""
         }
         private enum CodingKeys: String, CodingKey {
             case scanState, aggregates, settings, lastAlertDay, lastTipDay, pricingVersion, dataVersion, todayConcurrency
+            case launchAtLogin, lastBundlePath, lastVersion
         }
     }
 
