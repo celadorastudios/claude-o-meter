@@ -66,7 +66,9 @@ PLIST
 codesign --force --sign - "$MACOS/$APP_NAME"
 codesign --force --sign - "$APP"
 echo "==> signature:"
-codesign --verify --verbose "$APP" 2>&1 | tail -1 || true
+# Deliberately not `|| true`: a broken seal should fail the build rather than ship
+# silently. Same checks as before, only the result is no longer discarded.
+codesign --verify --verbose "$APP"
 
 echo "==> done: $APP"
 echo "    Run:    open $APP"

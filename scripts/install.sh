@@ -30,7 +30,33 @@ echo "==> Downloading $APP_NAME $TAG..."
 TMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TMP_DIR"' EXIT
 
-curl -fL --progress-bar "$DOWNLOAD_URL" -o "$TMP_DIR/$APP_NAME.zip"
+curl -fL --proto '=https' --tlsv1.2 --progress-bar "$DOWNLOAD_URL" -o "$TMP_DIR/$APP_NAME.zip"
+
+# The .app is ad-hoc signed, so its own signature says nothing about who built it.
+# GitHub build provenance is what actually ties this zip to a commit and workflow run
+# in $REPO. Verified opportunistically: releases published before provenance was added
+# have no attestation, and not every user has `gh`, so a failure warns rather than
+# aborts. Set CLAUDEOMETER_STRICT_VERIFY=1 to make an unverifiable download fatal.
+STRICT="${CLAUDEOMETER_STRICT_VERIFY:-0}"
+if command -v gh &>/dev/null && gh auth status &>/dev/null; then
+  echo "==> Verifying build provenance..."
+  if gh attestation verify "$TMP_DIR/$APP_NAME.zip" --repo "$REPO" &>/dev/null; then
+    echo "    Provenance verified: built by $REPO in GitHub Actions."
+  else
+    echo "    WARNING: could not verify build provenance for this download." >&2
+    echo "    Releases published before provenance was enabled have no attestation." >&2
+    if [[ "$STRICT" == "1" ]]; then
+      echo "error: CLAUDEOMETER_STRICT_VERIFY=1 and verification failed. Aborting." >&2
+      exit 1
+    fi
+  fi
+elif [[ "$STRICT" == "1" ]]; then
+  echo "error: CLAUDEOMETER_STRICT_VERIFY=1 but the GitHub CLI is unavailable or not" >&2
+  echo "       authenticated, so provenance cannot be checked. Aborting." >&2
+  exit 1
+else
+  echo "==> Skipping provenance check (GitHub CLI not available or not authenticated)."
+fi
 
 echo "==> Extracting..."
 unzip -q "$TMP_DIR/$APP_NAME.zip" -d "$TMP_DIR"

@@ -1,7 +1,8 @@
 name: Release
 
 # Triggered by pushing a version tag, e.g.: git tag v0.3.0 && git push origin v0.3.0
-# Only repo collaborators can push tags, so this is inherently restricted to trusted users.
+# Tag creation on `v*` is additionally restricted to repo admins by the `release-tags`
+# ruleset, so write-access collaborators cannot publish a release on their own.
 on:
   push:
     tags:
@@ -14,7 +15,9 @@ jobs:
   build:
     runs-on: macos-latest
     permissions:
-      contents: write  # required to create GitHub Releases and upload assets
+      contents: write      # required to create GitHub Releases and upload assets
+      id-token: write      # required to mint the provenance signing certificate
+      attestations: write  # required to record the provenance attestation
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -28,6 +31,15 @@ jobs:
 
       - name: Zip app
         run: cd dist && zip -r ClaudeOMeter.zip ClaudeOMeter.app
+
+      # The .app is ad-hoc signed, so its signature proves nothing about origin.
+      # This attestation is the verifiable link between the published zip and the
+      # exact commit and workflow run that produced it. Users can check it with:
+      #   gh attestation verify ClaudeOMeter.zip --repo celadorastudios/claude-o-meter
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/ClaudeOMeter.zip
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2

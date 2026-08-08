@@ -48,6 +48,23 @@ This downloads the latest release, installs it to `~/Applications/`, clears the 
 
 > **Manual install:** Download `ClaudeOMeter.zip` from [Releases](https://github.com/celadorastudios/claude-o-meter/releases), unzip, drag `ClaudeOMeter.app` to `~/Applications/` or `/Applications/`, then run `xattr -dr com.apple.quarantine ~/Applications/ClaudeOMeter.app` before launching.
 
+### Why the quarantine step is needed
+
+The app is ad-hoc signed rather than signed with an Apple Developer ID, so macOS cannot
+attribute it to a registered developer and Gatekeeper blocks it on first launch. Clearing
+the quarantine flag is what gets past that.
+
+Because you are being asked to disable a safety check, you should be able to confirm the
+download is genuinely ours. Every release is published with GitHub build provenance, which
+cryptographically ties the zip to the exact commit and workflow run that produced it:
+
+```bash
+gh attestation verify ClaudeOMeter.zip --repo celadorastudios/claude-o-meter
+```
+
+The installer runs this automatically when the GitHub CLI is available. To refuse to install
+anything that fails the check, run it with `CLAUDEOMETER_STRICT_VERIFY=1`.
+
 ---
 
 ## Build from source
