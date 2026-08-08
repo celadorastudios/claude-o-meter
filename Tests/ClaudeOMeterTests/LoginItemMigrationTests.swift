@@ -102,6 +102,83 @@ final class LoginItemMigrationTests: XCTestCase {
         }
     }
 
+    // MARK: - Committing the new location
+
+    /// Recording the path is what tells the next launch the move is handled, so it must
+    /// wait for the system to agree. `setEnabled` cannot report failure, and an
+    /// ad-hoc-signed app often lands on `.requiresApproval` rather than `.enabled`, so
+    /// "we asked" is not evidence of success. Committing anyway would make one failed
+    /// attempt permanent: the path would match forever and re-registration could never
+    /// fire again for this location.
+    func testNewPathIsNotRecordedUntilTheSystemAgrees() {
+        XCTAssertFalse(LoginItemManager.shouldRecordNewPath(intendedEnabled: true,
+                                                            resultingIsEnabled: false),
+                       "a failed or unapproved registration must be retried next launch")
+    }
+
+    func testNewPathIsRecordedOnceRegistrationSucceeded() {
+        XCTAssertTrue(LoginItemManager.shouldRecordNewPath(intendedEnabled: true,
+                                                           resultingIsEnabled: true))
+    }
+
+    /// Nothing to achieve when the user does not want it on, so the move is complete and
+    /// must not be retried forever.
+    func testNewPathIsRecordedWhenTheUserDoesNotWantItOn() {
+        for resulting in [true, false] {
+            XCTAssertTrue(LoginItemManager.shouldRecordNewPath(intendedEnabled: false,
+                                                               resultingIsEnabled: resulting))
+        }
+    }
+
+    // MARK: - Path normalisation
+
+    /// The whole mechanism turns on exact string equality, so both sides must be
+    /// normalised identically or a move is detected that never happened.
+    func testTrailingSlashIsNotAMove() {
+        let plain = LoginItemManager.normalizedPath(URL(fileURLWithPath: new))
+        let slashed = LoginItemManager.normalizedPath(URL(fileURLWithPath: new + "/"))
+        XCTAssertEqual(plain, slashed)
+    }
+
+    func testRelativeComponentsAreResolved() {
+        let direct = LoginItemManager.normalizedPath(URL(fileURLWithPath: "/Applications/ClaudeOMeter.app"))
+        let indirect = LoginItemManager.normalizedPath(URL(fileURLWithPath: "/Applications/./ClaudeOMeter.app"))
+        XCTAssertEqual(direct, indirect)
+    }
+
+    /// A symlinked ancestor must not read as a different location, which is the whole
+    /// point of resolving before comparing.
+    ///
+    /// Built against a real symlink on disk rather than a fabricated path, because
+    /// `resolvingSymlinksInPath()` only resolves components that actually exist. The
+    /// bundle this runs against in production always exists, so this is the faithful
+    /// shape of the check.
+    func testSymlinkedAncestorResolvesToOneStablePath() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("loginitem-\(UUID().uuidString)")
+        let real = root.appendingPathComponent("real")
+        let bundle = real.appendingPathComponent("ClaudeOMeter.app")
+        try fm.createDirectory(at: bundle, withIntermediateDirectories: true)
+        addTeardownBlock { try? fm.removeItem(at: root) }
+
+        let link = root.appendingPathComponent("link")
+        try fm.createSymbolicLink(at: link, withDestinationURL: real)
+
+        let viaSymlink = LoginItemManager.normalizedPath(link.appendingPathComponent("ClaudeOMeter.app"))
+        let viaReal = LoginItemManager.normalizedPath(bundle)
+
+        XCTAssertEqual(viaSymlink, viaReal,
+                       "the same bundle reached through a symlink must not read as a move")
+    }
+
+    /// Normalisation must be idempotent, or a stored path could differ from the same path
+    /// re-normalised on the next launch.
+    func testNormalisationIsIdempotent() {
+        let once = LoginItemManager.normalizedPath(URL(fileURLWithPath: new))
+        let twice = LoginItemManager.normalizedPath(URL(fileURLWithPath: once))
+        XCTAssertEqual(once, twice)
+    }
+
     // MARK: - Persistence of the intent
 
     /// The setting is only restorable if it is actually written down, and it has to

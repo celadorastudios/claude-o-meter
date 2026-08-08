@@ -64,11 +64,12 @@ final class UsageStore: ObservableObject {
             Persistence.save(snapshot)
         }
 
-        reconcileLoginItem()
-
         rebuildPublished()
         startAutoRefresh()
         Task { await checkForUpdate() }
+        // Off the synchronous init path: init() has to finish before the menu-bar label
+        // first paints, and this queries SMAppService. Same treatment as the update check.
+        Task { self.reconcileLoginItem() }
     }
 
     /// Keeps the launch-at-login setting attached to the app after it changes location.
@@ -83,21 +84,47 @@ final class UsageStore: ObservableObject {
         // launch look like a move.
         let bundleURL = Bundle.main.bundleURL
         guard LoginItemManager.isRegistrableBundle(bundleURL) else { return }
-        let currentPath = bundleURL.path
 
-        // First launch that records a path: adopt the system's current answer as intent,
-        // otherwise an existing user's enabled setting would read as "never wanted it"
-        // and a later move would not be migrated.
-        if snapshot.lastBundlePath.isEmpty {
-            snapshot.launchAtLogin = LoginItemManager.shared.isEnabled
+        let manager = LoginItemManager.shared
+        let currentPath = LoginItemManager.normalizedPath(bundleURL)
+        let previousPath = snapshot.lastBundlePath
+        var intent = snapshot.launchAtLogin
+
+        if previousPath.isEmpty {
+            // First launch that records a path: adopt the system's answer as intent.
+            //
+            // Known limit: a user whose first launch of this build is already *after* a
+            // move has nothing to adopt, because the registration was lost before this
+            // code ever ran. They are seeded off and re-enable once from the toggle,
+            // which reads live status so it shows the truth.
+            intent = manager.isEnabled
+        } else if previousPath == currentPath {
+            // Same location, so the system is authoritative: an "off" here is the user's
+            // own choice in System Settings. Record it, otherwise a stale "on" would sit
+            // in storage and resurrect the setting at some unrelated later move.
+            intent = manager.isEnabled
         } else {
-            LoginItemManager.shared.reconcileAfterMove(intendedEnabled: snapshot.launchAtLogin,
-                                                       lastBundlePath: snapshot.lastBundlePath,
-                                                       currentBundlePath: currentPath)
+            manager.reconcileAfterMove(intendedEnabled: intent,
+                                       lastBundlePath: previousPath,
+                                       currentBundlePath: currentPath)
         }
 
-        guard snapshot.lastBundlePath != currentPath else { return }
-        snapshot.lastBundlePath = currentPath
+        // Committing the path is what marks a move as handled, so it waits until the
+        // system actually matches the intent. A refused or unapproved registration
+        // therefore retries on the next launch instead of being written off forever.
+        let recordPath = LoginItemManager.shouldRecordNewPath(intendedEnabled: intent,
+                                                              resultingIsEnabled: manager.isEnabled)
+
+        var changed = false
+        if snapshot.launchAtLogin != intent {
+            snapshot.launchAtLogin = intent
+            changed = true
+        }
+        if recordPath, snapshot.lastBundlePath != currentPath {
+            snapshot.lastBundlePath = currentPath
+            changed = true
+        }
+        guard changed else { return }
         Persistence.save(snapshot)
     }
 
