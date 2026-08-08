@@ -134,6 +134,16 @@ enum UpdateInstaller {
           sleep 1
           WAITED=$((WAITED + 1))
         done
+
+        # If it never exited, do not swap the bundle out from under a live process. That
+        # would also poison the launch check below, which asks whether a ClaudeOMeter is
+        # running: the *old* one still would be, so a crashed new build would look
+        # healthy and the rollback copy would be thrown away.
+        if [ "$PID" -gt 0 ] && kill -0 "$PID" 2>/dev/null; then
+          echo "app is still running after ${LIMIT}s; leaving the current version alone" >&2
+          exit 1
+        fi
+
         sleep "${CLAUDEOMETER_UPDATE_DELAY:-1}"
 
         safe_rm "$STAGE"
@@ -166,7 +176,12 @@ enum UpdateInstaller {
         STARTED=0
         WAITED=0
         LIMIT="${CLAUDEOMETER_LAUNCH_TIMEOUT:-20}"
-        while [ "$WAITED" -lt "$LIMIT" ]; do
+        # Without pgrep there is no way to tell, and rolling back a healthy install on a
+        # missing tool would be worse than skipping the check.
+        if ! command -v pgrep >/dev/null 2>&1; then
+          STARTED=1
+        fi
+        while [ "$STARTED" -eq 0 ] && [ "$WAITED" -lt "$LIMIT" ]; do
           if pgrep -x "ClaudeOMeter" >/dev/null 2>&1; then STARTED=1; break; fi
           sleep 1
           WAITED=$((WAITED + 1))
@@ -175,14 +190,20 @@ enum UpdateInstaller {
         if [ "$STARTED" -eq 1 ]; then
           safe_rm "$BACKUP"
         elif [ -d "$BACKUP" ]; then
-          # Roll back. The broken bundle is moved aside first, so a failure here still
-          # leaves the new copy in place rather than nothing at all.
+          # Roll back. Every branch must leave *some* working bundle at $DEST: ending up
+          # with none is the failure this whole dance exists to avoid.
           echo "new version did not start; restoring the previous one" >&2
           safe_rm "$DEST.failed"
-          if mv "$DEST" "$DEST.failed" 2>/dev/null && mv "$BACKUP" "$DEST"; then
-            safe_rm "$DEST.failed"
-            open "$DEST"
+          if mv "$DEST" "$DEST.failed" 2>/dev/null; then
+            if mv "$BACKUP" "$DEST"; then
+              safe_rm "$DEST.failed"
+            else
+              # Could not put the old one back, so return the new one rather than
+              # leave the destination empty.
+              mv "$DEST.failed" "$DEST" 2>/dev/null
+            fi
           fi
+          open "$DEST"
         fi
 
         safe_rm "\(destDir)"

@@ -157,13 +157,18 @@ final class UsageStore: ObservableObject {
             // would sit in storage and resurrect the setting at some unrelated later move.
             intent = manager.isEnabled
 
-        case .moved, .updatedInPlace:
+        case .moved:
             // The bundle is not the one the registration was made against, so a system
             // "off" says nothing about what the user wants. Restore their intent instead
             // of reading the change as a decision.
-            manager.reconcileAfterMove(intendedEnabled: intent,
-                                       lastBundlePath: previousPath,
-                                       currentBundlePath: currentPath)
+            manager.restoreRegistration(context: context,
+                                        intendedEnabled: intent,
+                                        detail: "app moved from \(previousPath) to \(currentPath)")
+
+        case .updatedInPlace:
+            manager.restoreRegistration(context: context,
+                                        intendedEnabled: intent,
+                                        detail: "updated in place from \(snapshot.lastVersion) to \(currentVersion)")
         }
 
         // Committing the path is what marks a move as handled, so it waits until the

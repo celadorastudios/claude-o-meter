@@ -153,6 +153,28 @@ final class UpdateInstallerTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: f.dest.path + ".failed"))
     }
 
+    /// Regression guard. `pgrep -x ClaudeOMeter` matches *any* instance, so if the old
+    /// process outlived the exit wait the script would see it, conclude the new build
+    /// started, and throw away the rollback copy. The swap now refuses to run at all
+    /// while the old process is alive, which removes that reading entirely.
+    func testRefusesToSwapWhileTheOldProcessIsStillRunning() throws {
+        let sleeper = Process()
+        sleeper.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        sleeper.arguments = ["30"]
+        try sleeper.run()
+        addTeardownBlock { sleeper.terminate() }
+
+        let f = try makeFixture(installedMarker: "old", stagedMarker: "new")
+        // Exit wait gives up quickly; the process is still alive when it does.
+        let result = try runScript(destPath: f.dest.path, fixture: f,
+                                   quittingPID: sleeper.processIdentifier,
+                                   exitTimeout: 2)
+
+        XCTAssertNotEqual(result.exitCode, 0, "should refuse rather than swap under a live app")
+        XCTAssertTrue(result.output.contains("still running"), "should say why: \(result.output)")
+        XCTAssertEqual(try marker(in: f.dest), "old", "the running install must be untouched")
+    }
+
     // MARK: - Waiting for the old process to exit
 
     /// A fixed sleep raced a slow shutdown and could swap the bundle under a live process,
@@ -287,7 +309,8 @@ final class UpdateInstallerTests: XCTestCase {
     @discardableResult
     private func runScript(destPath: String,
                            fixture f: Fixture,
-                           quittingPID: Int32 = 0) throws -> (exitCode: Int32, output: String) {
+                           quittingPID: Int32 = 0,
+                           exitTimeout: Int = 10) throws -> (exitCode: Int32, output: String) {
         let script = UpdateInstaller.helperScript(destPath: destPath,
                                                   newAppPath: f.newApp.path,
                                                   destDir: f.unpackDir.path,
@@ -302,7 +325,7 @@ final class UpdateInstallerTests: XCTestCase {
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = stubBin.path + ":" + (env["PATH"] ?? "/usr/bin:/bin")
         env["CLAUDEOMETER_UPDATE_DELAY"] = "0"    // no reason to wait in tests
-        env["CLAUDEOMETER_EXIT_TIMEOUT"] = "10"   // bounds the pid wait
+        env["CLAUDEOMETER_EXIT_TIMEOUT"] = String(exitTimeout)  // bounds the pid wait
         env["CLAUDEOMETER_LAUNCH_TIMEOUT"] = "2"  // keeps the rollback case quick
         process.environment = env
 

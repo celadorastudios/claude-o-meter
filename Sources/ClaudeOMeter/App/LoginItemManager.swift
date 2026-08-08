@@ -65,27 +65,31 @@ final class LoginItemManager {
     /// running from now.
     ///
     /// `SMAppService.mainApp` registers the *running* bundle, so a registration does not
-    /// follow the app when it changes location. Moving from `/Applications` to
-    /// `~/Applications` (the path anyone stranded by the old hardcoded-destination
-    /// updater takes when they reinstall) leaves the old registration dangling and the
-    /// new location unregistered, and the app silently stops launching at login.
+    /// survive the bundle being replaced or moved. Either way the app silently stops
+    /// launching at login.
     ///
-    /// Deliberately gated on the path having *changed*. Re-registering whenever intent
-    /// says on but the system says off would override someone who switched it off in
-    /// System Settings, making the app impossible to disable there. A move is the only
-    /// case where the system's "off" is an accident rather than a choice.
+    /// The decision is driven entirely by `LaunchContext`, which already established
+    /// whether the bundle changed. Re-deriving that here by comparing paths was a bug:
+    /// an in-place update keeps the same path, so a path comparison classified it as "no
+    /// change" and the repair never ran.
+    ///
+    /// `unchanged` deliberately does not re-register. With the same bundle still in
+    /// place, a system "off" is the user's own choice in System Settings, and overriding
+    /// it would make the app impossible to disable there.
     ///
     /// Pure and static so the whole decision table is testable without touching
     /// ServiceManagement.
-    static func shouldReRegister(intendedEnabled: Bool,
-                                 isCurrentlyEnabled: Bool,
-                                 lastBundlePath: String,
-                                 currentBundlePath: String) -> Bool {
+    static func shouldReRegister(context: LaunchContext,
+                                 intendedEnabled: Bool,
+                                 isCurrentlyEnabled: Bool) -> Bool {
         guard intendedEnabled, !isCurrentlyEnabled else { return false }
-        // No recorded path means this is the first launch that tracks one; there is no
-        // move to migrate and re-registering here would be guesswork.
-        guard !lastBundlePath.isEmpty else { return false }
-        return lastBundlePath != currentBundlePath
+        switch context {
+        case .moved, .updatedInPlace:
+            return true
+        case .firstRun, .unchanged:
+            // Nothing to migrate: no history, or the same bundle the user last decided on.
+            return false
+        }
     }
 
     /// Whether this bundle location is one worth tracking and registering.
@@ -130,18 +134,16 @@ final class LoginItemManager {
     /// A `true` result means the attempt was made, not that it succeeded: `setEnabled`
     /// cannot report failure. Callers must re-read `isEnabled` to learn the outcome.
     @discardableResult
-    func reconcileAfterMove(intendedEnabled: Bool,
-                            lastBundlePath: String,
-                            currentBundlePath: String) -> Bool {
-        guard Self.shouldReRegister(intendedEnabled: intendedEnabled,
-                                    isCurrentlyEnabled: isEnabled,
-                                    lastBundlePath: lastBundlePath,
-                                    currentBundlePath: currentBundlePath) else {
+    func restoreRegistration(context: LaunchContext,
+                             intendedEnabled: Bool,
+                             detail: String) -> Bool {
+        guard Self.shouldReRegister(context: context,
+                                    intendedEnabled: intendedEnabled,
+                                    isCurrentlyEnabled: isEnabled) else {
             return false
         }
 
-        AppLog.shared.info("app moved from \(lastBundlePath) to \(currentBundlePath); restoring launch-at-login",
-                           category: "app")
+        AppLog.shared.info("\(detail); restoring launch-at-login", category: "app")
         setEnabled(true)
         return true
     }

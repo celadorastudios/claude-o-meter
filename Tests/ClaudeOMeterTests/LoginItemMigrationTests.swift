@@ -18,10 +18,9 @@ final class LoginItemMigrationTests: XCTestCase {
     // MARK: - The case this exists for
 
     func testReRegistersWhenTheBundleMovedAndTheUserWantedItOn() {
-        XCTAssertTrue(LoginItemManager.shouldReRegister(intendedEnabled: true,
-                                                        isCurrentlyEnabled: false,
-                                                        lastBundlePath: old,
-                                                        currentBundlePath: new))
+        XCTAssertTrue(LoginItemManager.shouldReRegister(context: .moved,
+                                                        intendedEnabled: true,
+                                                        isCurrentlyEnabled: false))
     }
 
     // MARK: - Cases that must NOT act
@@ -30,59 +29,70 @@ final class LoginItemMigrationTests: XCTestCase {
     /// app would re-enable itself every launch and could never be switched off in
     /// System Settings.
     func testDoesNotReRegisterWhenTheUserTurnedItOffInSystemSettings() {
-        XCTAssertFalse(LoginItemManager.shouldReRegister(intendedEnabled: true,
-                                                         isCurrentlyEnabled: false,
-                                                         lastBundlePath: new,
-                                                         currentBundlePath: new),
+        XCTAssertFalse(LoginItemManager.shouldReRegister(context: .unchanged,
+                                                        intendedEnabled: true,
+                                                        isCurrentlyEnabled: false),
                        "same path means the system's 'off' was a deliberate choice")
     }
 
     /// No recorded path means nothing is known about a previous location, so acting would
     /// be guesswork rather than migration.
     func testDoesNotReRegisterOnFirstRun() {
-        XCTAssertFalse(LoginItemManager.shouldReRegister(intendedEnabled: true,
-                                                         isCurrentlyEnabled: false,
-                                                         lastBundlePath: "",
-                                                         currentBundlePath: new))
+        XCTAssertFalse(LoginItemManager.shouldReRegister(context: .firstRun,
+                                                        intendedEnabled: true,
+                                                        isCurrentlyEnabled: false))
     }
 
     func testDoesNotReRegisterWhenTheUserNeverWantedIt() {
-        XCTAssertFalse(LoginItemManager.shouldReRegister(intendedEnabled: false,
-                                                         isCurrentlyEnabled: false,
-                                                         lastBundlePath: old,
-                                                         currentBundlePath: new))
+        XCTAssertFalse(LoginItemManager.shouldReRegister(context: .moved,
+                                                        intendedEnabled: false,
+                                                        isCurrentlyEnabled: false))
     }
 
     /// A move that somehow kept its registration needs no repair.
     func testDoesNotReRegisterWhenAlreadyEnabled() {
-        XCTAssertFalse(LoginItemManager.shouldReRegister(intendedEnabled: true,
-                                                         isCurrentlyEnabled: true,
-                                                         lastBundlePath: old,
-                                                         currentBundlePath: new))
+        XCTAssertFalse(LoginItemManager.shouldReRegister(context: .moved,
+                                                        intendedEnabled: true,
+                                                        isCurrentlyEnabled: true))
     }
 
-    /// An ordinary in-place upgrade: the swap script replaces the bundle at the same path,
-    /// so the registration survives and nothing should be touched.
-    func testSamePathUpgradeIsNotTreatedAsAMove() {
+    /// The same bundle at the same version: whatever the system says is the user's own
+    /// standing choice, so nothing is touched either way.
+    func testUnchangedLaunchNeverReRegisters() {
         for enabled in [true, false] {
-            XCTAssertFalse(LoginItemManager.shouldReRegister(intendedEnabled: true,
-                                                             isCurrentlyEnabled: enabled,
-                                                             lastBundlePath: new,
-                                                             currentBundlePath: new))
+            XCTAssertFalse(LoginItemManager.shouldReRegister(context: .unchanged,
+                                                             intendedEnabled: true,
+                                                             isCurrentlyEnabled: enabled))
         }
     }
 
+    /// Regression guard. `shouldReRegister` used to re-derive "did the bundle change" by
+    /// comparing paths, which are equal for an in-place update — so `.updatedInPlace` was
+    /// dead code and the repair it exists for never ran. Worse, the version could not be
+    /// committed while the system stayed off, so the app retried the same no-op forever.
+    /// The context is now the only thing that decides.
+    func testInPlaceUpdateReRegisters() {
+        XCTAssertTrue(LoginItemManager.shouldReRegister(context: .updatedInPlace,
+                                                        intendedEnabled: true,
+                                                        isCurrentlyEnabled: false),
+                      "an update that dropped the registration must repair it")
+    }
+
+    func testInPlaceUpdateRespectsAnIntentToStayOff() {
+        XCTAssertFalse(LoginItemManager.shouldReRegister(context: .updatedInPlace,
+                                                         intendedEnabled: false,
+                                                         isCurrentlyEnabled: false))
+    }
+
     /// The real migration direction, spelled out: install.sh installs to ~/Applications,
-    /// while the old updater wrote to /Applications.
-    func testMigratesInBothDirectionsBetweenTheTwoInstallLocations() {
-        XCTAssertTrue(LoginItemManager.shouldReRegister(intendedEnabled: true,
-                                                        isCurrentlyEnabled: false,
-                                                        lastBundlePath: old,
-                                                        currentBundlePath: new))
-        XCTAssertTrue(LoginItemManager.shouldReRegister(intendedEnabled: true,
-                                                        isCurrentlyEnabled: false,
-                                                        lastBundlePath: new,
-                                                        currentBundlePath: old))
+    /// while the old updater wrote to /Applications. Both readings are a move.
+    func testEitherInstallLocationChangeIsAMove() {
+        XCTAssertEqual(LoginItemManager.launchContext(lastPath: old, currentPath: new,
+                                                      lastVersion: "0.12.1", currentVersion: "0.12.1"),
+                       .moved)
+        XCTAssertEqual(LoginItemManager.launchContext(lastPath: new, currentPath: old,
+                                                      lastVersion: "0.12.1", currentVersion: "0.12.1"),
+                       .moved)
     }
 
     // MARK: - Which bundles are worth tracking
@@ -253,9 +263,8 @@ final class LoginItemMigrationTests: XCTestCase {
     /// it must never trigger a registration on its own.
     func testFreshSnapshotIsInert() {
         let snapshot = Persistence.Snapshot()
-        XCTAssertFalse(LoginItemManager.shouldReRegister(intendedEnabled: snapshot.launchAtLogin,
-                                                         isCurrentlyEnabled: false,
-                                                         lastBundlePath: snapshot.lastBundlePath,
-                                                         currentBundlePath: new))
+        XCTAssertFalse(LoginItemManager.shouldReRegister(context: .moved,
+                                                        intendedEnabled: snapshot.launchAtLogin,
+                                                        isCurrentlyEnabled: false))
     }
 }
