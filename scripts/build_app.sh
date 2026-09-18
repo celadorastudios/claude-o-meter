@@ -41,9 +41,17 @@ fi
 
 # Also copy icon assets directly to Contents/Resources/ so SwiftUI's Image("name") can
 # find them via Bundle.main without needing to look inside the SwiftPM sub-bundle.
+# The sub-bundle's own layout varies by toolchain: older SwiftPM/Xcode produce it flat
+# (icon directly under the .bundle), newer ones produce it "deep" (nested under the
+# .bundle's own Contents/Resources/), so check both rather than assuming one.
 for img in "claude-icon.png" "claude-icon@2x.png" "claude-code-icon.png" "claude-code-icon@2x.png" "AppIcon.icns"; do
-  SRC="$BIN_PATH/${APP_NAME}_${APP_NAME}.bundle/$img"
-  [ -f "$SRC" ] && cp "$SRC" "$RES/$img"
+  for SRC in "$BIN_PATH/${APP_NAME}_${APP_NAME}.bundle/$img" \
+             "$BIN_PATH/${APP_NAME}_${APP_NAME}.bundle/Contents/Resources/$img"; do
+    if [ -f "$SRC" ]; then
+      cp "$SRC" "$RES/$img"
+      break
+    fi
+  done
 done
 
 cat > "$CONTENTS/Info.plist" <<PLIST
