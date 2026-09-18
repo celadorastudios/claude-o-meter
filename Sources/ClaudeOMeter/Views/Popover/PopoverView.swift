@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 import UniformTypeIdentifiers
 
 struct PopoverView: View {
@@ -69,6 +70,23 @@ struct PopoverView: View {
             if chartMode == .hourly, isToday {
                 loadHourlySlices(for: viewingDay, silent: true)
             }
+        }
+        // MenuBarExtra(.window) content is re-shown rather than re-instantiated (that's why
+        // @State like chartMode survives between opens), and it exposes no "did show"
+        // callback or scenePhase signal — so without this, opening the popover on Daily
+        // showed whatever the last 60s timer tick left behind. didBecomeKeyNotification is
+        // the reliable signal (the popover must become key for its text fields to work);
+        // onAppear is kept alongside it belt-and-braces. Both funnel through the same
+        // throttle, so a store refresh here also flushes to Hourly via the onChange above.
+        .onAppear { store.refreshIfStale() }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { note in
+            // Unscoped, this notification also fires for the Browse/Export file panels and
+            // confirmation alerts this view presents (all shown via runModal, so each becomes
+            // key in turn) — skip those rather than scanning on every dialog interaction.
+            if let window = note.object as? NSWindow, window is NSOpenPanel || window is NSSavePanel {
+                return
+            }
+            store.refreshIfStale()
         }
     }
 

@@ -261,6 +261,14 @@ final class UsageStore: ObservableObject {
 
     // MARK: - Refresh
 
+    /// Scan when the popover becomes visible, unless a scan just ran or is already in
+    /// flight. The footer's explicit refresh button calls `refresh()` directly instead —
+    /// a user-initiated click should never be throttled.
+    func refreshIfStale(now: Date = Date()) {
+        guard RefreshPolicy.shouldRefreshOnPresentation(lastRefresh: lastRefresh, now: now, isRefreshing: isRefreshing) else { return }
+        refresh()
+    }
+
     func refresh() {
         if lastUpdateCheck.map({ Date().timeIntervalSince($0) > 21600 }) ?? false {
             Task { await checkForUpdate() }
