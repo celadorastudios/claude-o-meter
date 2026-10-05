@@ -7,6 +7,7 @@ struct TokenUsage: Codable, Sendable, Equatable {
     var cacheRead: Int = 0
     var cacheWrite5m: Int = 0
     var cacheWrite1h: Int = 0
+    var webSearchRequests: Int = 0
 
     var total: Int { input + output + cacheRead + cacheWrite5m + cacheWrite1h }
 
@@ -16,8 +17,28 @@ struct TokenUsage: Codable, Sendable, Equatable {
             output: lhs.output + rhs.output,
             cacheRead: lhs.cacheRead + rhs.cacheRead,
             cacheWrite5m: lhs.cacheWrite5m + rhs.cacheWrite5m,
-            cacheWrite1h: lhs.cacheWrite1h + rhs.cacheWrite1h
+            cacheWrite1h: lhs.cacheWrite1h + rhs.cacheWrite1h,
+            webSearchRequests: lhs.webSearchRequests + rhs.webSearchRequests
         )
+    }
+
+    init(input: Int = 0, output: Int = 0, cacheRead: Int = 0,
+         cacheWrite5m: Int = 0, cacheWrite1h: Int = 0, webSearchRequests: Int = 0) {
+        self.input = input; self.output = output; self.cacheRead = cacheRead
+        self.cacheWrite5m = cacheWrite5m; self.cacheWrite1h = cacheWrite1h
+        self.webSearchRequests = webSearchRequests
+    }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        input             = (try? c.decodeIfPresent(Int.self, forKey: .input))             ?? 0
+        output            = (try? c.decodeIfPresent(Int.self, forKey: .output))            ?? 0
+        cacheRead         = (try? c.decodeIfPresent(Int.self, forKey: .cacheRead))         ?? 0
+        cacheWrite5m      = (try? c.decodeIfPresent(Int.self, forKey: .cacheWrite5m))      ?? 0
+        cacheWrite1h      = (try? c.decodeIfPresent(Int.self, forKey: .cacheWrite1h))      ?? 0
+        webSearchRequests = (try? c.decodeIfPresent(Int.self, forKey: .webSearchRequests)) ?? 0
+    }
+    private enum CodingKeys: String, CodingKey {
+        case input, output, cacheRead, cacheWrite5m, cacheWrite1h, webSearchRequests
     }
 }
 
@@ -30,6 +51,15 @@ struct UsageRecord: Sendable, Equatable {
     let rawModel: String    // original model string (for reference)
     let usage: TokenUsage
     let projectDir: String  // encoded directory name under ~/.claude/projects/
+    let isFast: Bool        // usage.speed == "fast"
+    let isDomestic: Bool    // usage.inference_geo == "us"
+
+    init(id: String, day: String, hour: Int, model: String, rawModel: String,
+         usage: TokenUsage, projectDir: String, isFast: Bool = false, isDomestic: Bool = false) {
+        self.id = id; self.day = day; self.hour = hour; self.model = model
+        self.rawModel = rawModel; self.usage = usage; self.projectDir = projectDir
+        self.isFast = isFast; self.isDomestic = isDomestic
+    }
 }
 
 /// Cost breakdown for one hour of a single day. Computed on demand; never persisted.
@@ -46,18 +76,30 @@ struct ModelUsage: Codable, Sendable, Equatable {
     var rawModel: String = ""
     var usage: TokenUsage = TokenUsage()
     var cost: Double = 0
+    var surchargeUSD: Double = 0
+    /// Usage broken out by exact raw model string, so `recost` can reprice each raw model's
+    /// own slice independently instead of repricing the cumulative `usage` under a single
+    /// `rawModel` — needed whenever a day mixes two differently-priced raw models under the
+    /// same family (e.g. direct-API + Bedrock-routed calls for the same model). Empty for
+    /// aggregates folded before this field existed; `recost` falls back to the old
+    /// single-rawModel approximation in that case (repaired by the next full re-fold).
+    var perRawModelUsage: [String: TokenUsage] = [:]
 
-    init(model: String, rawModel: String = "", usage: TokenUsage = TokenUsage(), cost: Double = 0) {
+    init(model: String, rawModel: String = "", usage: TokenUsage = TokenUsage(), cost: Double = 0,
+         surchargeUSD: Double = 0, perRawModelUsage: [String: TokenUsage] = [:]) {
         self.model = model; self.rawModel = rawModel; self.usage = usage; self.cost = cost
+        self.surchargeUSD = surchargeUSD; self.perRawModelUsage = perRawModelUsage
     }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        model    = try  c.decode(String.self,     forKey: .model)
-        rawModel = (try? c.decodeIfPresent(String.self,     forKey: .rawModel))    ?? ""
-        usage    = (try? c.decodeIfPresent(TokenUsage.self, forKey: .usage))       ?? TokenUsage()
-        cost     = (try? c.decodeIfPresent(Double.self,     forKey: .cost))        ?? 0
+        model            = try  c.decode(String.self,     forKey: .model)
+        rawModel         = (try? c.decodeIfPresent(String.self,     forKey: .rawModel))         ?? ""
+        usage            = (try? c.decodeIfPresent(TokenUsage.self, forKey: .usage))            ?? TokenUsage()
+        cost             = (try? c.decodeIfPresent(Double.self,     forKey: .cost))              ?? 0
+        surchargeUSD     = (try? c.decodeIfPresent(Double.self,     forKey: .surchargeUSD))      ?? 0
+        perRawModelUsage = (try? c.decodeIfPresent([String: TokenUsage].self, forKey: .perRawModelUsage)) ?? [:]
     }
-    private enum CodingKeys: String, CodingKey { case model, rawModel, usage, cost }
+    private enum CodingKeys: String, CodingKey { case model, rawModel, usage, cost, surchargeUSD, perRawModelUsage }
 }
 
 /// Per-project cost + model breakdown for one day. Accumulated incrementally from scan records.

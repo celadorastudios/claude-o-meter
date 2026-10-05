@@ -21,7 +21,7 @@ enum Aggregator {
         return Int((Double(u.cacheRead) * over).rounded())
     }
 
-    /// Fold new records into `aggregates`, recomputing per-model cost with `pricing`.
+    /// Fold new records into `aggregates`, accumulating cost per record.
     static func fold(
         records: [UsageRecord],
         into aggregates: inout [String: DailyAggregate],
@@ -31,9 +31,17 @@ enum Aggregator {
             var day = aggregates[rec.day] ?? DailyAggregate(day: rec.day)
             var model = day.perModel[rec.model] ?? ModelUsage(model: rec.model, rawModel: rec.rawModel)
             let prevCost = model.cost
+
+            let recordBaseCost = pricing.cost(of: rec.usage, family: rec.model, rawModel: rec.rawModel)
+            let multiplier = pricing.surchargeMultiplier(
+                family: rec.model, rawModel: rec.rawModel, isFast: rec.isFast, isDomestic: rec.isDomestic)
+            model.surchargeUSD += recordBaseCost * (multiplier - 1)
+
             model.usage = model.usage + rec.usage
-            model.rawModel = rec.rawModel   // always use the latest rawModel seen for this family/day
-            model.cost = pricing.cost(of: model.usage, family: rec.model, rawModel: rec.rawModel)
+            model.rawModel = rec.rawModel
+            model.perRawModelUsage[rec.rawModel, default: TokenUsage()] =
+                model.perRawModelUsage[rec.rawModel, default: TokenUsage()] + rec.usage
+            model.cost += recordBaseCost * multiplier
             day.perModel[rec.model] = model
 
             let taxable = taxableCacheRead(for: rec)
@@ -52,11 +60,26 @@ enum Aggregator {
     }
 
     /// Recompute all costs (used when pricing.json changes).
+    /// Per-record fast/domestic surchargeUSD cannot be regenerated (attribution doesn't survive aggregation),
+    /// so the existing accumulator is preserved and added back. The base cost is repriced per raw model
+    /// (via `perRawModelUsage`) rather than from the cumulative `usage` under a single `rawModel` — a day
+    /// mixing two differently-priced raw models under the same family (e.g. direct-API + Bedrock-routed
+    /// calls for the same model) would otherwise get repriced entirely at whichever model was seen last.
+    /// Aggregates folded before `perRawModelUsage` existed fall back to the old single-rawModel
+    /// approximation; the next full re-fold (triggered by a `Persistence.currentDataVersion` bump) repairs them.
     static func recost(_ aggregates: inout [String: DailyAggregate], pricing: PricingTable) {
         for (day, agg) in aggregates {
             var newAgg = agg
             for (key, var model) in agg.perModel {
-                model.cost = pricing.cost(of: model.usage, family: model.model, rawModel: model.rawModel)
+                let baseCost: Double
+                if model.perRawModelUsage.isEmpty {
+                    baseCost = pricing.cost(of: model.usage, family: model.model, rawModel: model.rawModel)
+                } else {
+                    baseCost = model.perRawModelUsage.reduce(0) { sum, entry in
+                        sum + pricing.cost(of: entry.value, family: model.model, rawModel: entry.key)
+                    }
+                }
+                model.cost = baseCost + model.surchargeUSD
                 newAgg.perModel[key] = model
             }
             aggregates[day] = newAgg

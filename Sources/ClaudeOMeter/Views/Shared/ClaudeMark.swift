@@ -20,23 +20,38 @@ struct BundleImage: View {
 
     private var nsImage: NSImage? {
         let res = Bundle.main.resourceURL
-        let candidates = ["\(name)@2x.png", "\(name).png"]
+        let candidates = ["\(name)@2x", "\(name)"]
         for file in candidates {
-            if let url = res?.appendingPathComponent(file),
-               let img = NSImage(contentsOf: url) {
-                img.size = NSSize(width: size, height: size)
-                if template { img.isTemplate = true }
+            if let url = res?.appendingPathComponent("\(file).png"),
+               let img = configured(NSImage(contentsOf: url)) {
                 return img
             }
         }
-        if let url = Bundle.main.url(forResource: name, withExtension: "png",
-                                     subdirectory: "ClaudeOMeter_ClaudeOMeter.bundle"),
-           let img = NSImage(contentsOf: url) {
-            img.size = NSSize(width: size, height: size)
-            if template { img.isTemplate = true }
-            return img
+        for file in candidates {
+            if let url = Bundle.main.url(forResource: file, withExtension: "png",
+                                         subdirectory: "ClaudeOMeter_ClaudeOMeter.bundle"),
+               let img = configured(NSImage(contentsOf: url)) {
+                return img
+            }
+        }
+        // swift run / swift test: Bundle.main isn't the app bundle at all, and the
+        // sub-bundle's on-disk layout (flat vs. nested under its own Contents/Resources/)
+        // varies by toolchain. Bundle.module already knows how to resolve either, so it's
+        // the only lookup that works here (see Persistence.loadPricing() for the same pattern).
+        for file in candidates {
+            if let url = Bundle.module.url(forResource: file, withExtension: "png"),
+               let img = configured(NSImage(contentsOf: url)) {
+                return img
+            }
         }
         return nil
+    }
+
+    private func configured(_ img: NSImage?) -> NSImage? {
+        guard let img else { return nil }
+        img.size = NSSize(width: size, height: size)
+        if template { img.isTemplate = true }
+        return img
     }
 
     var body: some View {

@@ -79,7 +79,8 @@ struct TranscriptScanner: Sendable {
                 guard state.seenIDs[rec.id] == nil else { continue }
                 state.seenIDs[rec.id] = rec.day
                 rec = UsageRecord(id: rec.id, day: rec.day, hour: rec.hour, model: rec.model,
-                                  rawModel: rec.rawModel, usage: rec.usage, projectDir: projectDir)
+                                  rawModel: rec.rawModel, usage: rec.usage, projectDir: projectDir,
+                                  isFast: rec.isFast, isDomestic: rec.isDomestic)
                 records.append(rec)
             }
 
@@ -191,8 +192,11 @@ struct TranscriptScanner: Sendable {
         let rawModel = (message["model"] as? String) ?? "unknown"
         let family = ModelNormalizer.family(for: rawModel)
         let usage = parseUsage(usageDict)
+        let isFast = (usageDict["speed"] as? String) == "fast"
+        let isDomestic = (usageDict["inference_geo"] as? String) == "us"
         let hour = DayBucket.date(fromISO: ts).map { Calendar.current.component(.hour, from: $0) } ?? 0
-        return UsageRecord(id: id, day: day, hour: hour, model: family, rawModel: rawModel, usage: usage, projectDir: "")
+        return UsageRecord(id: id, day: day, hour: hour, model: family, rawModel: rawModel,
+                           usage: usage, projectDir: "", isFast: isFast, isDomestic: isDomestic)
     }
 
     /// Derive a human-readable project name from an encoded Claude project directory name.
@@ -254,7 +258,12 @@ struct TranscriptScanner: Sendable {
                 let rawModel = (msg["model"] as? String) ?? "unknown"
                 let family = ModelNormalizer.family(for: rawModel)
                 let usage = parseUsage(usageDict)
-                let cost = pricing.cost(of: usage, family: family, rawModel: rawModel)
+                let baseCost = pricing.cost(of: usage, family: family, rawModel: rawModel)
+                let isFast = (usageDict["speed"] as? String) == "fast"
+                let isDomestic = (usageDict["inference_geo"] as? String) == "us"
+                let multiplier = pricing.surchargeMultiplier(
+                    family: family, rawModel: rawModel, isFast: isFast, isDomestic: isDomestic)
+                let cost = baseCost * multiplier
                 guard cost > 0 else { continue }
 
                 let date = DayBucket.date(fromISO: ts)
@@ -291,12 +300,18 @@ struct TranscriptScanner: Sendable {
             }
         }
 
+        var webSearchRequests = 0
+        if let serverToolUse = u["server_tool_use"] as? [String: Any] {
+            webSearchRequests = intVal("web_search_requests", in: serverToolUse)
+        }
+
         return TokenUsage(
             input: input,
             output: output,
             cacheRead: cacheRead,
             cacheWrite5m: write5m,
-            cacheWrite1h: write1h
+            cacheWrite1h: write1h,
+            webSearchRequests: webSearchRequests
         )
     }
 }

@@ -159,11 +159,11 @@ final class ClaudeOMeterTests: XCTestCase {
     }
 
     func testCurrentOpusDoesNotUseDeprecatedRate() {
-        // Exact-key lookup for claude-opus-4-8 should NOT exist → uses family "opus" rate ($5).
+        // claude-opus-4-8 has an exact-key entry (for fastMultiplier) but at the same $5/$25 rate as the family.
         let pricing = PricingTable.default
         let usage = TokenUsage(input: 1_000_000)
         XCTAssertEqual(pricing.cost(of: usage, family: "opus", rawModel: "claude-opus-4-8"), 5.0, accuracy: 1e-9)
-        XCTAssertNil(pricing.models["claude-opus-4-8"], "claude-opus-4-8 must not have an exact-key override")
+        XCTAssertNotNil(pricing.models["claude-opus-4-8"], "claude-opus-4-8 has an exact-key entry for fastMultiplier")
     }
 
     // MARK: - Pricing: fallback for unknown models
@@ -660,6 +660,56 @@ final class ClaudeOMeterTests: XCTestCase {
                        "rawModel should be updated to the latest record's value")
     }
 
+    func testProviderPrefixStrippedForExactKeyLookup() {
+        let pricing = PricingTable.default
+        let usage = TokenUsage(cacheRead: 1_000_000)
+        // bedrock/ prefix stripped -> us.anthropic.claude-sonnet-5 -> Bedrock US exact key ($0.22/MTok)
+        let bedrockCost = pricing.cost(of: usage, family: "sonnet", rawModel: "bedrock/us.anthropic.claude-sonnet-5")
+        XCTAssertEqual(bedrockCost, 0.22, accuracy: 1e-9,
+                       "Bedrock-routed sonnet-5 should use us.anthropic rate ($0.22/MTok cacheRead)")
+        // Direct API -> claude-sonnet-5 exact key ($0.20/MTok)
+        let directCost = pricing.cost(of: usage, family: "sonnet", rawModel: "claude-sonnet-5")
+        XCTAssertEqual(directCost, 0.20, accuracy: 1e-9,
+                       "Direct-API sonnet-5 should use $0.20/MTok cacheRead")
+        XCTAssertEqual(bedrockCost / directCost, 1.1, accuracy: 1e-9,
+                       "Bedrock rate should be 10% above direct API rate")
+    }
+
+    func testStripProviderPrefix() {
+        XCTAssertEqual(ModelNormalizer.stripProviderPrefix("bedrock/us.anthropic.claude-sonnet-5"), "us.anthropic.claude-sonnet-5")
+        XCTAssertEqual(ModelNormalizer.stripProviderPrefix("vertex_ai/claude-sonnet-5"), "claude-sonnet-5")
+        XCTAssertEqual(ModelNormalizer.stripProviderPrefix("claude-sonnet-5"), "claude-sonnet-5")
+        XCTAssertEqual(ModelNormalizer.stripProviderPrefix("anthropic.claude-haiku-4-5"), "anthropic.claude-haiku-4-5")
+        XCTAssertEqual(ModelNormalizer.stripProviderPrefix("some-future-model"), "some-future-model")
+        XCTAssertEqual(ModelNormalizer.stripProviderPrefix(""), "")
+    }
+
+    func testBedrockUSRegionalPricing() {
+        let pricing = PricingTable.default
+        let usage = TokenUsage(input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000)
+        // Direct API: $2 + $10 + $0.20 = $12.20
+        XCTAssertEqual(pricing.cost(of: usage, family: "sonnet", rawModel: "claude-sonnet-5"), 12.20, accuracy: 1e-9)
+        // Bedrock US: $2.20 + $11 + $0.22 = $13.42
+        XCTAssertEqual(pricing.cost(of: usage, family: "sonnet", rawModel: "bedrock/us.anthropic.claude-sonnet-5"), 13.42, accuracy: 1e-9)
+    }
+
+    func testFoldMixedRawModelsInSameFamilyPricedPerRecord() {
+        let pricing = PricingTable.default
+        var aggs: [String: DailyAggregate] = [:]
+        let r1 = UsageRecord(id: "a", day: "2026-06-20", hour: 0, model: "sonnet",
+                             rawModel: "claude-sonnet-5",
+                             usage: TokenUsage(cacheRead: 10_000_000), projectDir: "proj")
+        let r2 = UsageRecord(id: "b", day: "2026-06-20", hour: 1, model: "sonnet",
+                             rawModel: "bedrock/us.anthropic.claude-sonnet-5",
+                             usage: TokenUsage(cacheRead: 1_000_000), projectDir: "proj")
+        Aggregator.fold(records: [r1, r2], into: &aggs, pricing: pricing)
+        let cost = aggs["2026-06-20"]!.perModel["sonnet"]!.cost
+        // r1: 10M * $0.20/MTok (direct API) = $2.00
+        // r2: 1M * $0.22/MTok (Bedrock US) = $0.22
+        XCTAssertEqual(cost, 2.22, accuracy: 1e-9,
+                       "Each record must be priced at its own rate (direct vs Bedrock)")
+    }
+
     // MARK: - Semver comparison
 
     func testSemverNewerPatch() {
@@ -690,5 +740,346 @@ final class ClaudeOMeterTests: XCTestCase {
         // "dev" parses to [] (no numeric parts), which is equivalent to 0.0.0
         XCTAssertTrue(UpdateChecker.isNewer("0.1.0", than: "dev"))
         XCTAssertTrue(UpdateChecker.isNewer("0.0.1", than: "dev"))
+    }
+
+    // MARK: - Fix 1: Sonnet 5 exact-key pricing
+
+    func testSonnet5PricedAtNewRate() {
+        let pricing = PricingTable.default
+        let usage = TokenUsage(input: 1_000_000, output: 1_000_000)
+        // $2 input + $10 output = $12, not the old $3 + $15 = $18
+        XCTAssertEqual(pricing.cost(of: usage, family: "sonnet", rawModel: "claude-sonnet-5"), 12.0, accuracy: 1e-9)
+    }
+
+    func testSonnet55PricedAtNewRate() {
+        let pricing = PricingTable.default
+        let usage = TokenUsage(input: 1_000_000, output: 1_000_000)
+        XCTAssertEqual(pricing.cost(of: usage, family: "sonnet", rawModel: "claude-sonnet-5-5"), 12.0, accuracy: 1e-9)
+    }
+
+    func testSonnet46StillUsesFamilyRate() {
+        let pricing = PricingTable.default
+        let usage = TokenUsage(input: 1_000_000, output: 1_000_000)
+        // $3 + $15 = $18 (family rate, no exact-key override)
+        XCTAssertEqual(pricing.cost(of: usage, family: "sonnet", rawModel: "claude-sonnet-4-6"), 18.0, accuracy: 1e-9)
+    }
+
+    // MARK: - Fix 2: Opus 5.5 exact-key pricing
+
+    func testOpus55PricedAtNewRate() {
+        let pricing = PricingTable.default
+        let usage = TokenUsage(input: 1_000_000, output: 1_000_000)
+        // $4 input + $20 output = $24, not the family $5 + $25 = $30
+        XCTAssertEqual(pricing.cost(of: usage, family: "opus", rawModel: "claude-opus-5-5"), 24.0, accuracy: 1e-9)
+    }
+
+    func testOpus55CacheReadRate() {
+        let pricing = PricingTable.default
+        let usage = TokenUsage(cacheRead: 1_000_000)
+        // $0.20/M, not the family $0.50/M
+        XCTAssertEqual(pricing.cost(of: usage, family: "opus", rawModel: "claude-opus-5-5"), 0.20, accuracy: 1e-9)
+    }
+
+    // MARK: - Fix 5: Fable 5.1 cache-read rate
+
+    func testFable51CacheReadRate() {
+        let pricing = PricingTable.default
+        let usage = TokenUsage(cacheRead: 1_000_000)
+        XCTAssertEqual(pricing.cost(of: usage, family: "fable", rawModel: "claude-fable-5-1"), 0.25, accuracy: 1e-9)
+    }
+
+    func testFable5CacheReadStillUsesFamilyRate() {
+        let pricing = PricingTable.default
+        let usage = TokenUsage(cacheRead: 1_000_000)
+        // Older generation uses family $1.00/M
+        XCTAssertEqual(pricing.cost(of: usage, family: "fable", rawModel: "claude-fable-5"), 1.00, accuracy: 1e-9)
+    }
+
+    // MARK: - Fix 3: Fast-mode surcharge
+
+    func testFastModeOpus48DoubleCost() {
+        let pricing = PricingTable.default
+        let usage = TokenUsage(input: 1_000_000, output: 1_000_000)
+        let baseCost = pricing.cost(of: usage, family: "opus", rawModel: "claude-opus-4-8")
+        // base = $5 + $25 = $30
+
+        var aggs: [String: DailyAggregate] = [:]
+        let rec = UsageRecord(id: "a", day: "2026-06-20", hour: 0, model: "opus", rawModel: "claude-opus-4-8",
+                              usage: usage, projectDir: "", isFast: true)
+        Aggregator.fold(records: [rec], into: &aggs, pricing: pricing)
+        // Fast doubles the cost: $30 * 2 = $60
+        XCTAssertEqual(aggs["2026-06-20"]?.totalCost ?? 0, baseCost * 2, accuracy: 1e-9)
+        XCTAssertEqual(aggs["2026-06-20"]?.totalCost ?? 0, 60.0, accuracy: 1e-9)
+    }
+
+    func testFastModeSonnet5Unaffected() {
+        let pricing = PricingTable.default
+        let usage = TokenUsage(input: 1_000_000, output: 1_000_000)
+        let baseCost = pricing.cost(of: usage, family: "sonnet", rawModel: "claude-sonnet-5")
+
+        var aggsStd: [String: DailyAggregate] = [:]
+        let recStd = UsageRecord(id: "a", day: "2026-06-20", hour: 0, model: "sonnet", rawModel: "claude-sonnet-5",
+                                 usage: usage, projectDir: "")
+        Aggregator.fold(records: [recStd], into: &aggsStd, pricing: pricing)
+
+        var aggsFast: [String: DailyAggregate] = [:]
+        let recFast = UsageRecord(id: "b", day: "2026-06-20", hour: 0, model: "sonnet", rawModel: "claude-sonnet-5",
+                                  usage: usage, projectDir: "", isFast: true)
+        Aggregator.fold(records: [recFast], into: &aggsFast, pricing: pricing)
+
+        // No fastMultiplier for sonnet → same cost
+        XCTAssertEqual(aggsStd["2026-06-20"]?.totalCost ?? 0, baseCost, accuracy: 1e-9)
+        XCTAssertEqual(aggsFast["2026-06-20"]?.totalCost ?? 0, baseCost, accuracy: 1e-9)
+    }
+
+    // MARK: - Fix 4: Web search cost
+
+    func testWebSearchCostAdded() {
+        let pricing = PricingTable.default
+        let usage = TokenUsage(input: 1_000_000, webSearchRequests: 3)
+        // $5 input + 3 * $0.01 = $5.03
+        XCTAssertEqual(pricing.cost(of: usage, family: "opus", rawModel: "claude-opus-4-8"), 5.03, accuracy: 1e-9)
+    }
+
+    // MARK: - Fix 6: Domestic surcharge
+
+    func testDomesticSurchargeAdds10Percent() {
+        let pricing = PricingTable.default
+        let usage = TokenUsage(input: 1_000_000)
+        let baseCost = pricing.cost(of: usage, family: "sonnet", rawModel: "claude-sonnet-5")
+        // base = $2. Domestic surcharge = 10% = $0.20. Total = $2.20
+
+        var aggs: [String: DailyAggregate] = [:]
+        let rec = UsageRecord(id: "a", day: "2026-06-20", hour: 0, model: "sonnet", rawModel: "claude-sonnet-5",
+                              usage: usage, projectDir: "", isDomestic: true)
+        Aggregator.fold(records: [rec], into: &aggs, pricing: pricing)
+        XCTAssertEqual(aggs["2026-06-20"]?.totalCost ?? 0, baseCost * 1.1, accuracy: 1e-9)
+    }
+
+    func testFastAndDomesticMultiply() {
+        let pricing = PricingTable.default
+        let usage = TokenUsage(input: 1_000_000, output: 1_000_000)
+        let baseCost = pricing.cost(of: usage, family: "opus", rawModel: "claude-opus-4-8")
+        // base = $30. fast=2, domestic=1.1 → 2*1.1 = 2.2x → $66
+
+        var aggs: [String: DailyAggregate] = [:]
+        let rec = UsageRecord(id: "a", day: "2026-06-20", hour: 0, model: "opus", rawModel: "claude-opus-4-8",
+                              usage: usage, projectDir: "", isFast: true, isDomestic: true)
+        Aggregator.fold(records: [rec], into: &aggs, pricing: pricing)
+        XCTAssertEqual(aggs["2026-06-20"]?.totalCost ?? 0, baseCost * 2.2, accuracy: 1e-9)
+        XCTAssertEqual(aggs["2026-06-20"]?.totalCost ?? 0, 66.0, accuracy: 1e-9)
+    }
+
+    // MARK: - Mixed-bucket regression: fast + standard in same day/model
+
+    func testMixedFastAndStandardSameModel() {
+        let pricing = PricingTable.default
+        let usage = TokenUsage(input: 1_000_000)
+        let basePer = pricing.cost(of: usage, family: "opus", rawModel: "claude-opus-4-8")
+        // basePer = $5 per record.
+        // Record 1: standard → surcharge $0. Record 2: fast → surcharge $5 (2x-1=1x of base).
+        // Total = cost(2M input) + surcharge = $10 + $5 = $15
+
+        var aggs: [String: DailyAggregate] = [:]
+        let std = UsageRecord(id: "a", day: "2026-06-20", hour: 0, model: "opus", rawModel: "claude-opus-4-8",
+                              usage: usage, projectDir: "")
+        let fast = UsageRecord(id: "b", day: "2026-06-20", hour: 0, model: "opus", rawModel: "claude-opus-4-8",
+                               usage: usage, projectDir: "", isFast: true)
+        Aggregator.fold(records: [std, fast], into: &aggs, pricing: pricing)
+
+        let model = aggs["2026-06-20"]?.perModel["opus"]
+        XCTAssertNotNil(model)
+        // base cost of 2M input = $10, plus surcharge from fast record = $5 → $15
+        XCTAssertEqual(model?.cost ?? 0, basePer * 3, accuracy: 1e-9)
+        XCTAssertEqual(model?.cost ?? 0, 15.0, accuracy: 1e-9)
+        XCTAssertEqual(model?.surchargeUSD ?? 0, basePer, accuracy: 1e-9)
+    }
+
+    // MARK: - Recost preserves surchargeUSD
+
+    func testRecostPreservesSurcharge() {
+        var pricing = PricingTable.default
+
+        var aggs: [String: DailyAggregate] = [:]
+        let usage = TokenUsage(input: 1_000_000)
+        let rec = UsageRecord(id: "a", day: "2026-06-20", hour: 0, model: "opus", rawModel: "claude-opus-4-8",
+                              usage: usage, projectDir: "", isFast: true)
+        Aggregator.fold(records: [rec], into: &aggs, pricing: pricing)
+
+        let origCost = aggs["2026-06-20"]?.perModel["opus"]?.cost ?? 0
+        let origSurcharge = aggs["2026-06-20"]?.perModel["opus"]?.surchargeUSD ?? 0
+        XCTAssertEqual(origCost, 10.0, accuracy: 1e-9)  // $5 base * 2 fast
+        XCTAssertEqual(origSurcharge, 5.0, accuracy: 1e-9)
+
+        // Change base rate
+        pricing.models["claude-opus-4-8"] = ModelPrice(input: 8, output: 40, cacheRead: 0.8, cacheWrite5m: 10, cacheWrite1h: 16, fastMultiplier: 2)
+        Aggregator.recost(&aggs, pricing: pricing)
+
+        let newCost = aggs["2026-06-20"]?.perModel["opus"]?.cost ?? 0
+        let newSurcharge = aggs["2026-06-20"]?.perModel["opus"]?.surchargeUSD ?? 0
+        // surchargeUSD preserved at $5 (not recomputed at new rate), base recosted to $8 → $8 + $5 = $13
+        XCTAssertEqual(newSurcharge, 5.0, accuracy: 1e-9)
+        XCTAssertEqual(newCost, 13.0, accuracy: 1e-9)
+    }
+
+    // MARK: - Backward compatibility: pre-change pricing.json decodes through new types
+
+    func testOldPricingJsonDecodesWithNewTypes() {
+        let oldJson = """
+        {
+          "version": 3,
+          "models": {
+            "fable":  { "input": 10.0, "output": 50.0, "cacheRead": 1.00, "cacheWrite5m": 12.50, "cacheWrite1h": 20.0 },
+            "opus":   { "input": 5.0,  "output": 25.0, "cacheRead": 0.50, "cacheWrite5m": 6.25,  "cacheWrite1h": 10.0 },
+            "sonnet": { "input": 3.0,  "output": 15.0, "cacheRead": 0.30, "cacheWrite5m": 3.75,  "cacheWrite1h": 6.0  },
+            "haiku":  { "input": 1.0,  "output": 5.0,  "cacheRead": 0.10, "cacheWrite5m": 1.25,  "cacheWrite1h": 2.0  },
+            "luna":   { "input": 1.1,  "output": 6.6,  "cacheRead": 0.0,  "cacheWrite5m": 0.0, "cacheWrite1h": 0.0 },
+            "terra":  { "input": 2.75, "output": 16.5, "cacheRead": 0.0,  "cacheWrite5m": 0.0, "cacheWrite1h": 0.0 },
+            "sol":    { "input": 5.5,  "output": 33.0, "cacheRead": 0.0,  "cacheWrite5m": 0.0, "cacheWrite1h": 0.0 },
+            "claude-opus-4-1": { "input": 15.0, "output": 75.0, "cacheRead": 1.50, "cacheWrite5m": 18.75, "cacheWrite1h": 30.0 }
+          },
+          "fallback": { "input": 5.0, "output": 25.0, "cacheRead": 0.50, "cacheWrite5m": 6.25, "cacheWrite1h": 10.0 },
+          "discountPercent": 0
+        }
+        """
+        let table = try? JSONDecoder().decode(PricingTable.self, from: Data(oldJson.utf8))
+        XCTAssertNotNil(table, "Old pricing.json must decode through new PricingTable type")
+        XCTAssertEqual(table?.version, 3)
+        XCTAssertNil(table?.webSearchCost)
+        XCTAssertNil(table?.usOnlyMultiplier)
+        XCTAssertEqual(table?.models["opus"]?.input, 5.0)
+        XCTAssertEqual(table?.models["opus"]?.output, 25.0)
+        XCTAssertNil(table?.models["opus"]?.fastMultiplier)
+        XCTAssertEqual(table?.models["claude-opus-4-1"]?.input, 15.0)
+
+        // web search cost defaults to 0, usOnly defaults to 1 at use sites
+        let usage = TokenUsage(input: 1_000_000, webSearchRequests: 5)
+        let cost = table?.cost(of: usage, family: "opus", rawModel: "claude-opus-4-8") ?? 0
+        // $5 input + 5 * $0 (nil webSearchCost) = $5
+        XCTAssertEqual(cost, 5.0, accuracy: 1e-9)
+    }
+
+    // MARK: - Backward compatibility: old TokenUsage/ModelUsage JSON without new fields
+
+    func testOldTokenUsageJsonDecodes() {
+        let oldJson = #"{"input":100,"output":200,"cacheRead":50,"cacheWrite5m":30,"cacheWrite1h":20}"#
+        let usage = try? JSONDecoder().decode(TokenUsage.self, from: Data(oldJson.utf8))
+        XCTAssertNotNil(usage, "Old TokenUsage JSON without webSearchRequests must decode")
+        XCTAssertEqual(usage?.input, 100)
+        XCTAssertEqual(usage?.output, 200)
+        XCTAssertEqual(usage?.cacheRead, 50)
+        XCTAssertEqual(usage?.cacheWrite5m, 30)
+        XCTAssertEqual(usage?.cacheWrite1h, 20)
+        XCTAssertEqual(usage?.webSearchRequests, 0)
+    }
+
+    func testOldModelUsageJsonDecodes() {
+        let oldJson = #"""
+        {
+          "model": "opus",
+          "rawModel": "claude-opus-4-8",
+          "usage": { "input": 1000000, "output": 0, "cacheRead": 0, "cacheWrite5m": 0, "cacheWrite1h": 0 },
+          "cost": 5.0
+        }
+        """#
+        let mu = try? JSONDecoder().decode(ModelUsage.self, from: Data(oldJson.utf8))
+        XCTAssertNotNil(mu, "Old ModelUsage JSON without surchargeUSD must decode")
+        XCTAssertEqual(mu?.model, "opus")
+        XCTAssertEqual(mu?.cost, 5.0)
+        XCTAssertEqual(mu?.surchargeUSD, 0)
+        XCTAssertEqual(mu?.usage.webSearchRequests, 0)
+        XCTAssertEqual(mu?.perRawModelUsage, [:])
+    }
+
+    func testOldModelUsageInsideDailyAggregateDecodes() {
+        let json = #"""
+        {
+          "day": "2026-06-20",
+          "perModel": { "opus": { "model": "opus", "rawModel": "claude-opus-4-8",
+            "usage": { "input": 1000000, "output": 0, "cacheRead": 0, "cacheWrite5m": 0, "cacheWrite1h": 0 },
+            "cost": 5.0 } },
+          "perProject": {}
+        }
+        """#
+        let agg = try? JSONDecoder().decode(DailyAggregate.self, from: Data(json.utf8))
+        XCTAssertNotNil(agg)
+        XCTAssertEqual(agg?.perModel["opus"]?.cost, 5.0)
+        XCTAssertEqual(agg?.perModel["opus"]?.surchargeUSD, 0)
+        XCTAssertEqual(agg?.perModel["opus"]?.usage.input, 1_000_000)
+        XCTAssertEqual(agg?.perModel["opus"]?.usage.webSearchRequests, 0)
+    }
+
+    // MARK: - Version bump
+
+    func testDefaultPricingTableVersion4() {
+        XCTAssertEqual(PricingTable.default.version, 4)
+    }
+
+    /// Hardcoded (not parametrized against the live constant) on purpose: this is the exact
+    /// class of mistake this PR fixed once already (fold-time cost logic changed without a
+    /// matching currentDataVersion bump, so stale pre-fix aggregates never got re-folded). A
+    /// test that compares `Persistence.currentDataVersion` against itself can never fail if a
+    /// future change reverts just the bump while keeping new fold-time-only fields — this one can.
+    func testCurrentDataVersionIsAtLeast4() {
+        XCTAssertEqual(Persistence.currentDataVersion, 4,
+                        "currentDataVersion must be bumped whenever fold-time cost logic changes " +
+                        "(see this constant's doc comment) — bumping it is what forces already-" +
+                        "persisted aggregates to be re-folded under the corrected logic")
+    }
+
+    // MARK: - recost reprices each raw model independently (mixed-provider same-family regression)
+
+    func testRecostRepricesEachRawModelIndependently() {
+        var pricing = PricingTable.default
+
+        var aggs: [String: DailyAggregate] = [:]
+        let direct = UsageRecord(id: "a", day: "2026-06-20", hour: 0, model: "sonnet", rawModel: "claude-sonnet-5",
+                                  usage: TokenUsage(cacheRead: 10_000_000), projectDir: "")
+        let bedrock = UsageRecord(id: "b", day: "2026-06-20", hour: 0, model: "sonnet",
+                                   rawModel: "bedrock/us.anthropic.claude-sonnet-5",
+                                   usage: TokenUsage(cacheRead: 1_000_000), projectDir: "")
+        Aggregator.fold(records: [direct, bedrock], into: &aggs, pricing: pricing)
+
+        // direct: 10M cacheRead @ $0.20/M = $2.00; bedrock: 1M cacheRead @ $0.22/M = $0.22
+        let foldedCost = aggs["2026-06-20"]?.perModel["sonnet"]?.cost ?? 0
+        XCTAssertEqual(foldedCost, 2.22, accuracy: 1e-9)
+
+        // Editing pricing.json (e.g. a flat discount) must not collapse the two raw models back
+        // to a single "last-seen rawModel" rate — recost should still price each slice on its own.
+        pricing.discountPercent = 10
+        Aggregator.recost(&aggs, pricing: pricing)
+        let recostedCost = aggs["2026-06-20"]?.perModel["sonnet"]?.cost ?? 0
+        XCTAssertEqual(recostedCost, 2.22 * 0.9, accuracy: 1e-9)
+    }
+
+    /// Aggregates folded before `perRawModelUsage` existed (empty dict) fall back to the old
+    /// single-rawModel approximation rather than crashing or losing cost entirely.
+    func testRecostFallsBackForPreFixAggregatesWithoutPerRawModelBreakdown() {
+        let pricing = PricingTable.default
+        let model = ModelUsage(model: "opus", rawModel: "claude-opus-4-8",
+                                usage: TokenUsage(input: 1_000_000), cost: 5.0)
+        XCTAssertEqual(model.perRawModelUsage, [:])  // simulates data persisted before this PR
+        var aggs: [String: DailyAggregate] = ["2026-06-20": DailyAggregate(day: "2026-06-20")]
+        aggs["2026-06-20"]?.perModel["opus"] = model
+        Aggregator.recost(&aggs, pricing: pricing)
+        XCTAssertEqual(aggs["2026-06-20"]?.perModel["opus"]?.cost ?? -1, 5.0, accuracy: 1e-9)
+    }
+
+    // MARK: - Bedrock regional pricing and the domestic surcharge don't compound
+
+    func testDomesticSurchargeDoesNotDoubleUpOnBedrockRegionalPricing() {
+        let pricing = PricingTable.default
+        let multiplier = pricing.surchargeMultiplier(
+            family: "sonnet", rawModel: "bedrock/us.anthropic.claude-sonnet-5", isFast: false, isDomestic: true)
+        // The Bedrock exact-key price already bakes in the 10% regional markup; isDomestic must
+        // not add a second 10% on top of it even if a record somehow reports both signals.
+        XCTAssertEqual(multiplier, 1.0, accuracy: 1e-9)
+    }
+
+    func testDomesticSurchargeStillAppliesForDirectApiCalls() {
+        let pricing = PricingTable.default
+        let multiplier = pricing.surchargeMultiplier(
+            family: "sonnet", rawModel: "claude-sonnet-5", isFast: false, isDomestic: true)
+        XCTAssertEqual(multiplier, 1.1, accuracy: 1e-9)
     }
 }
