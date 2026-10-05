@@ -257,4 +257,57 @@ final class TranscriptScannerTests: XCTestCase {
         fmt.timeZone = TimeZone(identifier: "UTC")
         return fmt.string(from: date)
     }
+
+    // MARK: - Parsing: speed, web_search_requests, inference_geo
+
+    func testParseCandidateWithFastAndWebSearchAndDomestic() {
+        let line = #"{"type":"assistant","timestamp":"2026-06-18T12:00:00.000Z","message":{"id":"msg_fast","model":"claude-opus-4-8","usage":{"input_tokens":500,"output_tokens":100,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"speed":"fast","server_tool_use":{"web_search_requests":2},"inference_geo":"us"}}}"#
+        let rec = TranscriptScanner.parseCandidate(Data(line.utf8))
+        XCTAssertNotNil(rec)
+        XCTAssertTrue(rec!.isFast)
+        XCTAssertTrue(rec!.isDomestic)
+        XCTAssertEqual(rec!.usage.webSearchRequests, 2)
+        XCTAssertEqual(rec!.usage.input, 500)
+        XCTAssertEqual(rec!.usage.output, 100)
+    }
+
+    func testParseCandidateWithoutNewFieldsDefaultsToZeroFalse() {
+        let line = #"{"type":"assistant","timestamp":"2026-06-18T12:00:00.000Z","message":{"id":"msg_std","model":"claude-sonnet-4-6","usage":{"input_tokens":200,"output_tokens":50}}}"#
+        let rec = TranscriptScanner.parseCandidate(Data(line.utf8))
+        XCTAssertNotNil(rec)
+        XCTAssertFalse(rec!.isFast)
+        XCTAssertFalse(rec!.isDomestic)
+        XCTAssertEqual(rec!.usage.webSearchRequests, 0)
+    }
+
+    func testParseUsageExtractsWebSearchRequests() {
+        let u: [String: Any] = [
+            "input_tokens": 100,
+            "output_tokens": 200,
+            "server_tool_use": ["web_search_requests": 5],
+        ]
+        let usage = TranscriptScanner.parseUsage(u)
+        XCTAssertEqual(usage.webSearchRequests, 5)
+        XCTAssertEqual(usage.input, 100)
+    }
+
+    func testParseUsageDefaultsWebSearchToZero() {
+        let u: [String: Any] = ["input_tokens": 100]
+        let usage = TranscriptScanner.parseUsage(u)
+        XCTAssertEqual(usage.webSearchRequests, 0)
+    }
+
+    func testParseCandidateStandardSpeedIsNotFast() {
+        let line = #"{"type":"assistant","timestamp":"2026-06-18T12:00:00.000Z","message":{"id":"msg_std2","model":"claude-opus-4-8","usage":{"input_tokens":100,"speed":"standard"}}}"#
+        let rec = TranscriptScanner.parseCandidate(Data(line.utf8))
+        XCTAssertNotNil(rec)
+        XCTAssertFalse(rec!.isFast)
+    }
+
+    func testParseCandidateInferenceGeoNotAvailableIsNotDomestic() {
+        let line = #"{"type":"assistant","timestamp":"2026-06-18T12:00:00.000Z","message":{"id":"msg_geo","model":"claude-opus-4-8","usage":{"input_tokens":100,"inference_geo":"not_available"}}}"#
+        let rec = TranscriptScanner.parseCandidate(Data(line.utf8))
+        XCTAssertNotNil(rec)
+        XCTAssertFalse(rec!.isDomestic)
+    }
 }

@@ -111,7 +111,10 @@ enum Persistence {
     ///   v3: repair re-fold for clients stuck at v2 — a build that stamped dataVersion 2 before
     ///       the taxable fold was correct leaves taxableCacheRead permanently empty (the one-shot
     ///       v2 guard never re-fires), so context_bloat can never surface. Re-fold to backfill.
-    static let currentDataVersion = 3
+    ///   v4: cost-calculation fold logic changed (incremental per-record costing + surchargeUSD,
+    ///       Bedrock/provider-prefix exact-key pricing, new model-version overrides). Aggregates
+    ///       computed under the old fold are stale and understate/overstate cost; re-fold to repair.
+    static let currentDataVersion = 4
 
     /// Pure migration to `currentDataVersion`. When the stored version is older, scanState and
     /// aggregates are cleared so the next scan re-folds every JSONL file; settings and alert/tip
