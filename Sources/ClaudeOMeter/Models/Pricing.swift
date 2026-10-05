@@ -90,10 +90,17 @@ struct PricingTable: Codable, Sendable, Equatable {
     }
 
     /// Combined multiplicative surcharge for fast-mode and domestic inference.
+    ///
+    /// `isDomestic` is excluded here when `rawModel` already resolved to a Bedrock-region exact-key
+    /// price (`us.anthropic.*`), which already bakes in its own regional markup — applying
+    /// `usOnlyMultiplier` on top would double-charge the same real-world surcharge. In practice the two
+    /// signals haven't been observed to co-occur on a single record (Bedrock-routed calls don't appear
+    /// to populate `inference_geo`), but nothing guarantees that stays true, so this guard is defensive.
     func surchargeMultiplier(family: String, rawModel: String, isFast: Bool, isDomestic: Bool) -> Double {
         let p = price(forFamily: family, rawModel: rawModel)
+        let isBedrockRegionPriced = ModelNormalizer.stripProviderPrefix(rawModel).lowercased().hasPrefix("us.anthropic.")
         let fast = (isFast ? (p?.fastMultiplier ?? 1) : 1)
-        let domestic = (isDomestic ? (usOnlyMultiplier ?? 1) : 1)
+        let domestic = (isDomestic && !isBedrockRegionPriced) ? (usOnlyMultiplier ?? 1) : 1
         return fast * domestic
     }
 }

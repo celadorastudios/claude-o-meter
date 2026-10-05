@@ -77,19 +77,29 @@ struct ModelUsage: Codable, Sendable, Equatable {
     var usage: TokenUsage = TokenUsage()
     var cost: Double = 0
     var surchargeUSD: Double = 0
+    /// Usage broken out by exact raw model string, so `recost` can reprice each raw model's
+    /// own slice independently instead of repricing the cumulative `usage` under a single
+    /// `rawModel` — needed whenever a day mixes two differently-priced raw models under the
+    /// same family (e.g. direct-API + Bedrock-routed calls for the same model). Empty for
+    /// aggregates folded before this field existed; `recost` falls back to the old
+    /// single-rawModel approximation in that case (repaired by the next full re-fold).
+    var perRawModelUsage: [String: TokenUsage] = [:]
 
-    init(model: String, rawModel: String = "", usage: TokenUsage = TokenUsage(), cost: Double = 0, surchargeUSD: Double = 0) {
-        self.model = model; self.rawModel = rawModel; self.usage = usage; self.cost = cost; self.surchargeUSD = surchargeUSD
+    init(model: String, rawModel: String = "", usage: TokenUsage = TokenUsage(), cost: Double = 0,
+         surchargeUSD: Double = 0, perRawModelUsage: [String: TokenUsage] = [:]) {
+        self.model = model; self.rawModel = rawModel; self.usage = usage; self.cost = cost
+        self.surchargeUSD = surchargeUSD; self.perRawModelUsage = perRawModelUsage
     }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        model        = try  c.decode(String.self,     forKey: .model)
-        rawModel     = (try? c.decodeIfPresent(String.self,     forKey: .rawModel))     ?? ""
-        usage        = (try? c.decodeIfPresent(TokenUsage.self, forKey: .usage))        ?? TokenUsage()
-        cost         = (try? c.decodeIfPresent(Double.self,     forKey: .cost))         ?? 0
-        surchargeUSD = (try? c.decodeIfPresent(Double.self,     forKey: .surchargeUSD)) ?? 0
+        model            = try  c.decode(String.self,     forKey: .model)
+        rawModel         = (try? c.decodeIfPresent(String.self,     forKey: .rawModel))         ?? ""
+        usage            = (try? c.decodeIfPresent(TokenUsage.self, forKey: .usage))            ?? TokenUsage()
+        cost             = (try? c.decodeIfPresent(Double.self,     forKey: .cost))              ?? 0
+        surchargeUSD     = (try? c.decodeIfPresent(Double.self,     forKey: .surchargeUSD))      ?? 0
+        perRawModelUsage = (try? c.decodeIfPresent([String: TokenUsage].self, forKey: .perRawModelUsage)) ?? [:]
     }
-    private enum CodingKeys: String, CodingKey { case model, rawModel, usage, cost, surchargeUSD }
+    private enum CodingKeys: String, CodingKey { case model, rawModel, usage, cost, surchargeUSD, perRawModelUsage }
 }
 
 /// Per-project cost + model breakdown for one day. Accumulated incrementally from scan records.

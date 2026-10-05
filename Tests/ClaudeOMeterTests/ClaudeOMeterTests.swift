@@ -988,6 +988,7 @@ final class ClaudeOMeterTests: XCTestCase {
         XCTAssertEqual(mu?.cost, 5.0)
         XCTAssertEqual(mu?.surchargeUSD, 0)
         XCTAssertEqual(mu?.usage.webSearchRequests, 0)
+        XCTAssertEqual(mu?.perRawModelUsage, [:])
     }
 
     func testOldModelUsageInsideDailyAggregateDecodes() {
@@ -1012,5 +1013,73 @@ final class ClaudeOMeterTests: XCTestCase {
 
     func testDefaultPricingTableVersion4() {
         XCTAssertEqual(PricingTable.default.version, 4)
+    }
+
+    /// Hardcoded (not parametrized against the live constant) on purpose: this is the exact
+    /// class of mistake this PR fixed once already (fold-time cost logic changed without a
+    /// matching currentDataVersion bump, so stale pre-fix aggregates never got re-folded). A
+    /// test that compares `Persistence.currentDataVersion` against itself can never fail if a
+    /// future change reverts just the bump while keeping new fold-time-only fields — this one can.
+    func testCurrentDataVersionIsAtLeast4() {
+        XCTAssertEqual(Persistence.currentDataVersion, 4,
+                        "currentDataVersion must be bumped whenever fold-time cost logic changes " +
+                        "(see this constant's doc comment) — bumping it is what forces already-" +
+                        "persisted aggregates to be re-folded under the corrected logic")
+    }
+
+    // MARK: - recost reprices each raw model independently (mixed-provider same-family regression)
+
+    func testRecostRepricesEachRawModelIndependently() {
+        var pricing = PricingTable.default
+
+        var aggs: [String: DailyAggregate] = [:]
+        let direct = UsageRecord(id: "a", day: "2026-06-20", hour: 0, model: "sonnet", rawModel: "claude-sonnet-5",
+                                  usage: TokenUsage(cacheRead: 10_000_000), projectDir: "")
+        let bedrock = UsageRecord(id: "b", day: "2026-06-20", hour: 0, model: "sonnet",
+                                   rawModel: "bedrock/us.anthropic.claude-sonnet-5",
+                                   usage: TokenUsage(cacheRead: 1_000_000), projectDir: "")
+        Aggregator.fold(records: [direct, bedrock], into: &aggs, pricing: pricing)
+
+        // direct: 10M cacheRead @ $0.20/M = $2.00; bedrock: 1M cacheRead @ $0.22/M = $0.22
+        let foldedCost = aggs["2026-06-20"]?.perModel["sonnet"]?.cost ?? 0
+        XCTAssertEqual(foldedCost, 2.22, accuracy: 1e-9)
+
+        // Editing pricing.json (e.g. a flat discount) must not collapse the two raw models back
+        // to a single "last-seen rawModel" rate — recost should still price each slice on its own.
+        pricing.discountPercent = 10
+        Aggregator.recost(&aggs, pricing: pricing)
+        let recostedCost = aggs["2026-06-20"]?.perModel["sonnet"]?.cost ?? 0
+        XCTAssertEqual(recostedCost, 2.22 * 0.9, accuracy: 1e-9)
+    }
+
+    /// Aggregates folded before `perRawModelUsage` existed (empty dict) fall back to the old
+    /// single-rawModel approximation rather than crashing or losing cost entirely.
+    func testRecostFallsBackForPreFixAggregatesWithoutPerRawModelBreakdown() {
+        let pricing = PricingTable.default
+        let model = ModelUsage(model: "opus", rawModel: "claude-opus-4-8",
+                                usage: TokenUsage(input: 1_000_000), cost: 5.0)
+        XCTAssertEqual(model.perRawModelUsage, [:])  // simulates data persisted before this PR
+        var aggs: [String: DailyAggregate] = ["2026-06-20": DailyAggregate(day: "2026-06-20")]
+        aggs["2026-06-20"]?.perModel["opus"] = model
+        Aggregator.recost(&aggs, pricing: pricing)
+        XCTAssertEqual(aggs["2026-06-20"]?.perModel["opus"]?.cost ?? -1, 5.0, accuracy: 1e-9)
+    }
+
+    // MARK: - Bedrock regional pricing and the domestic surcharge don't compound
+
+    func testDomesticSurchargeDoesNotDoubleUpOnBedrockRegionalPricing() {
+        let pricing = PricingTable.default
+        let multiplier = pricing.surchargeMultiplier(
+            family: "sonnet", rawModel: "bedrock/us.anthropic.claude-sonnet-5", isFast: false, isDomestic: true)
+        // The Bedrock exact-key price already bakes in the 10% regional markup; isDomestic must
+        // not add a second 10% on top of it even if a record somehow reports both signals.
+        XCTAssertEqual(multiplier, 1.0, accuracy: 1e-9)
+    }
+
+    func testDomesticSurchargeStillAppliesForDirectApiCalls() {
+        let pricing = PricingTable.default
+        let multiplier = pricing.surchargeMultiplier(
+            family: "sonnet", rawModel: "claude-sonnet-5", isFast: false, isDomestic: true)
+        XCTAssertEqual(multiplier, 1.1, accuracy: 1e-9)
     }
 }
