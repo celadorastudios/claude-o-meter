@@ -165,8 +165,32 @@ The prior Global read rate follows from the documented 50% reduction.
 Other token rates are unchanged, and a missing request date uses the earlier base price.
 These dated entries do not change the bare direct-API entry `claude-sonnet-5-5` or the generic family defaults.
 
+Haiku 5.5 has exact entries for the direct API, Bedrock US, and Bedrock Global routes.
+Rates below are USD / 1M tokens; the broad `haiku` family default is unchanged.
+
+| Route | Request prompt tokens | Input | Output | Cache Read | Cache Write (5m) | Cache Write (1h) |
+|---|---|------:|-------:|-----------:|-----------------:|-----------------:|
+| `claude-haiku-5-5` | Up to 100,000 | $0.10 | $0.50 | $0.01 | $0.125 | $0.20 |
+| `claude-haiku-5-5` | More than 100,000 | $0.50 | $2.50 | $0.05 | $0.625 | $1.00 |
+| `us.anthropic.claude-haiku-5-5` | Up to 100,000 | $0.11 | $0.55 | $0.011 | $0.1375 | $0.22 |
+| `us.anthropic.claude-haiku-5-5` | More than 100,000 | $0.55 | $2.75 | $0.055 | $0.6875 | $1.10 |
+| `global.anthropic.claude-haiku-5-5` | Up to 100,000 | $0.10 | $0.50 | $0.01 | $0.125 | $0.20 |
+| `global.anthropic.claude-haiku-5-5` | More than 100,000 | $0.50 | $2.50 | $0.05 | $0.625 | $1.00 |
+
+[Anthropic's pricing documentation](https://platform.claude.com/docs/en/about-claude/pricing) explicitly defines a cache-inclusive, per-request band.
+The Bedrock entries use the [AWS Haiku 5.5 model card's](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-haiku-5-5.html) matching threshold and token-category rule with that prompt definition, and [AWS's published prices](https://aws.amazon.com/bedrock/pricing/).
+The prompt count includes fresh input, cache reads, and all cache writes, but excludes output.
+Only prompts above 100,000 tokens use the higher rates, which apply to the whole request.
+The US rates already include the regional premium, so the domestic flag does not add it again.
+These entries have no dated price revisions.
+
+The bare `claude-haiku-5-5` ID uses direct-API prices; it does not imply US routing.
+A separate spend tool configured with US rates can report 10% more for that bare ID.
+If a proxy strips the route from transcript IDs, add an exact override for the reported ID using your contract's rates.
+
 This table is not a complete AWS price catalog.
-Haiku 5.5, GPT-6.1 Terra, and GPT-5.6 route-specific updates are not bundled because their complete context-band rules have not been established for this calculation.
+GPT-6.1 Terra and GPT-5.6 route-specific updates are not bundled because their complete context-band rules have not been established for this calculation.
+Other Haiku geography and Mantle routes are not verified by these entries.
 
 **Enterprise / EDP discount:** set `"discountPercent": 20` in `pricing.json` for 20% off all computed costs.
 
