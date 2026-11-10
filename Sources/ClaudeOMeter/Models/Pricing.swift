@@ -104,6 +104,13 @@ struct PricingTable: Codable, Sendable, Equatable {
             "claude-opus-5":     ModelPrice(input: 5, output: 25, cacheRead: 0.50, cacheWrite5m: 6.25, cacheWrite1h: 10, fastMultiplier: 2),
             "claude-opus-4-8":   ModelPrice(input: 5, output: 25, cacheRead: 0.50, cacheWrite5m: 6.25, cacheWrite1h: 10, fastMultiplier: 2),
             "claude-fable-5-1":  ModelPrice(input: 10, output: 50, cacheRead: 0.25, cacheWrite5m: 12.50, cacheWrite1h: 20),
+            // Claude Haiku 5.5 long-context tier: a request over 100,000 prompt tokens pays these rates.
+            // https://platform.claude.com/docs/en/about-claude/pricing#long-context-pricing
+            // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-haiku-5-5.html
+            "claude-haiku-5-5": ModelPrice(
+                input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite5m: 0.125, cacheWrite1h: 0.2,
+                longContextThreshold: 100_000,
+                longContext: LongContextPrice(input: 0.5, output: 2.5, cacheRead: 0.05, cacheWrite5m: 0.625, cacheWrite1h: 1)),
             // Bedrock US (us.anthropic.*) — 10% regional markup over direct-API rates.
             "us.anthropic.claude-sonnet-5":   ModelPrice(input: 2.20, output: 11, cacheRead: 0.22, cacheWrite5m: 2.75, cacheWrite1h: 4.40),
             "us.anthropic.claude-sonnet-5-5": ModelPrice(input: 2.20, output: 11, cacheRead: 0.22, cacheWrite5m: 2.75, cacheWrite1h: 4.40),
@@ -111,12 +118,21 @@ struct PricingTable: Codable, Sendable, Equatable {
             "us.anthropic.claude-opus-5":     ModelPrice(input: 5.50, output: 27.50, cacheRead: 0.55, cacheWrite5m: 6.875, cacheWrite1h: 11, fastMultiplier: 2),
             "us.anthropic.claude-opus-4-8":   ModelPrice(input: 5.50, output: 27.50, cacheRead: 0.55, cacheWrite5m: 6.875, cacheWrite1h: 11, fastMultiplier: 2),
             "us.anthropic.claude-fable-5-1":  ModelPrice(input: 11, output: 55, cacheRead: 0.28, cacheWrite5m: 13.75, cacheWrite1h: 22),
+            // Haiku 5.5 US rates are 1.1x the direct rates in both tiers.
+            "us.anthropic.claude-haiku-5-5": ModelPrice(
+                input: 0.11, output: 0.55, cacheRead: 0.011, cacheWrite5m: 0.1375, cacheWrite1h: 0.22,
+                longContextThreshold: 100_000,
+                longContext: LongContextPrice(input: 0.55, output: 2.75, cacheRead: 0.055, cacheWrite5m: 0.6875, cacheWrite1h: 1.1)),
             // Bedrock global cross-region inference (global.anthropic.*).
             "global.anthropic.claude-sonnet-5-5": ModelPrice(input: 2, output: 10, cacheRead: 0.20, cacheWrite5m: 2.50, cacheWrite1h: 4),
+            "global.anthropic.claude-haiku-5-5": ModelPrice(
+                input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite5m: 0.125, cacheWrite1h: 0.2,
+                longContextThreshold: 100_000,
+                longContext: LongContextPrice(input: 0.5, output: 2.5, cacheRead: 0.05, cacheWrite5m: 0.625, cacheWrite1h: 1)),
         ],
         fallback: ModelPrice(input: 5, output: 25, cacheRead: 0.50, cacheWrite5m: 6.25, cacheWrite1h: 10),
         discountPercent: 0,
-        version: 6,
+        version: 7,
         webSearchCost: 0.01,
         usOnlyMultiplier: 1.1,
         // AWS cut Claude Sonnet 5.5 cache-read rates by 50% from 2026-10-07. Sources: the AWS Bedrock pricing page

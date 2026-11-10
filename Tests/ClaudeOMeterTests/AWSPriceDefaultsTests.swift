@@ -91,11 +91,11 @@ final class AWSPriceDefaultsTests: XCTestCase {
         }
     }
 
-    func testBundledJSONCarriesVersionSixAndTheSameHistoryAsSwift() throws {
+    func testBundledJSONCarriesVersionSevenAndTheSameHistoryAsSwift() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let url = root.appendingPathComponent("Sources/ClaudeOMeter/Resources/pricing.json")
         let table = try JSONDecoder().decode(PricingTable.self, from: Data(contentsOf: url))
-        XCTAssertEqual(table.version, 6)
+        XCTAssertEqual(table.version, 7)
         XCTAssertEqual(table.modelPriceHistory.map { Set($0.keys) }, Set([usKey, globalKey]))
         XCTAssertEqual(table.modelPriceHistory?[usKey]?.first?.effectiveFrom, "2026-10-07")
         XCTAssertEqual(table.modelPriceHistory?[globalKey]?.first?.effectiveFrom, "2026-10-07")
