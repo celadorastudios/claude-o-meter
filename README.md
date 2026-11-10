@@ -138,20 +138,35 @@ Edit that file and click **Settings → Reload pricing** to apply changes withou
 
 `claude-opus-4-1` (deprecated model) keeps its legacy $15/$75 rate via an exact-key override.
 
-GPT-6.1 Sol on `bedrock_mantle/openai.gpt-6.1-sol` has an exact override for [AWS regional Standard pricing](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-1-sol.html).
-The same rates apply to its `[1m]` variant; the suffix does not select a billing tier.
+The exact Mantle routes for [GPT-6.1 Sol](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-1-sol.html), [GPT-6 Sol](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-sol.html), and [GPT-6 Luna](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-luna.html) use AWS regional Standard prices.
+Their keys are `bedrock_mantle/openai.gpt-6.1-sol`, `bedrock_mantle/openai.gpt-6-sol`, and `bedrock_mantle/openai.gpt-6-luna`.
+Each has an explicit `[1m]` variant with the same rates; the suffix changes capacity, not the billing tier.
 
-| Request input tokens | Input | Output | Cache Read | Cache Write (30m) |
-|----------------------|------:|-------:|-----------:|------------------:|
-| Up to 272,000 | $2.20 | $11.00 | $0.11 | $2.75 |
-| More than 272,000 | $4.40 | $16.50 | $0.22 | $5.50 |
+| Model | Request input tokens | Input | Output | Cache Read | Cache Write (30m) |
+|---|---|------:|-------:|-----------:|------------------:|
+| GPT-6.1 Sol | Up to 272,000 | $2.20 | $11.00 | $0.11 | $2.75 |
+| GPT-6.1 Sol | More than 272,000 | $4.40 | $16.50 | $0.22 | $5.50 |
+| GPT-6 Sol | Up to 272,000 | $2.20 | $11.00 | $0.22 | $2.75 |
+| GPT-6 Sol | More than 272,000 | $4.40 | $16.50 | $0.44 | $5.50 |
+| GPT-6 Luna | Up to 272,000 | $0.11 | $0.55 | $0.011 | $0.1375 |
+| GPT-6 Luna | More than 272,000 | $0.22 | $0.825 | $0.022 | $0.275 |
 
 The input threshold includes fresh input, cache reads, and cache writes, but not output tokens.
 Above the threshold, the higher rates apply to the whole request.
 The scanner stores unsplit 30-minute cache writes in the existing `cacheWrite5m` bucket.
-Both transcript cache-write buckets use Sol's single 30-minute write rate; a `cacheWrite1h` label does not make those tokens free or imply a supported one-hour TTL.
-Only these two routed model IDs receive this override; older Sol models retain the family rates above.
-Global inference and Ultrafast pricing are not covered by this override.
+Both transcript cache-write buckets use the model's single 30-minute write rate; a `cacheWrite1h` label does not make those tokens free or imply a supported one-hour TTL.
+These regional prices already include the premium, so the domestic flag does not add it again for these six exact routes.
+Other OpenAI routes retain their existing lookup behavior; Global inference and Ultrafast are not covered by these overrides.
+
+The Bedrock Sonnet 5.5 entries also include [AWS's cache-read price reduction](https://aws.amazon.com/bedrock/pricing/) from October 7, 2026.
+For `us.anthropic.claude-sonnet-5-5`, cache reads cost $0.22/M before that UTC date and $0.11/M from that date.
+For `global.anthropic.claude-sonnet-5-5`, they cost $0.20/M before that date and $0.10/M from that date.
+The prior Global read rate follows from the documented 50% reduction.
+Other token rates are unchanged, and a missing request date uses the earlier base price.
+These dated entries do not change the bare direct-API entry `claude-sonnet-5-5` or the generic family defaults.
+
+This table is not a complete AWS price catalog.
+Haiku 5.5, GPT-6.1 Terra, and GPT-5.6 route-specific updates are not bundled because their complete context-band rules have not been established for this calculation.
 
 **Enterprise / EDP discount:** set `"discountPercent": 20` in `pricing.json` for 20% off all computed costs.
 
