@@ -150,7 +150,7 @@ final class SolPricingTests: XCTestCase {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let url = root.appendingPathComponent("Sources/ClaudeOMeter/Resources/pricing.json")
         let table = try JSONDecoder().decode(PricingTable.self, from: Data(contentsOf: url))
-        XCTAssertEqual(table.version, 5)
+        XCTAssertEqual(table.version, 6)
         XCTAssertEqual(table, PricingTable.default)
     }
 }

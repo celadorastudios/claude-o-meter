@@ -74,6 +74,27 @@ struct PricingTable: Codable, Sendable, Equatable {
                 input: 2.2, output: 11, cacheRead: 0.11, cacheWrite5m: 2.75, cacheWrite1h: 2.75,
                 longContextThreshold: 272_000,
                 longContext: LongContextPrice(input: 4.4, output: 16.5, cacheRead: 0.22, cacheWrite5m: 5.5, cacheWrite1h: 5.5)),
+            // GPT-6 Luna and Sol on the same Mantle regional route as GPT-6.1 Sol. Official sources:
+            // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-luna.html and
+            // https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-sol.html.
+            // Mantle supports only a 30-minute cache TTL. The cacheWrite1h fields hold that same rate
+            // because the field names follow the Anthropic-shaped transcript buckets.
+            "bedrock_mantle/openai.gpt-6-luna": ModelPrice(
+                input: 0.11, output: 0.55, cacheRead: 0.011, cacheWrite5m: 0.1375, cacheWrite1h: 0.1375,
+                longContextThreshold: 272_000,
+                longContext: LongContextPrice(input: 0.22, output: 0.825, cacheRead: 0.022, cacheWrite5m: 0.275, cacheWrite1h: 0.275)),
+            "bedrock_mantle/openai.gpt-6-luna[1m]": ModelPrice(
+                input: 0.11, output: 0.55, cacheRead: 0.011, cacheWrite5m: 0.1375, cacheWrite1h: 0.1375,
+                longContextThreshold: 272_000,
+                longContext: LongContextPrice(input: 0.22, output: 0.825, cacheRead: 0.022, cacheWrite5m: 0.275, cacheWrite1h: 0.275)),
+            "bedrock_mantle/openai.gpt-6-sol": ModelPrice(
+                input: 2.2, output: 11, cacheRead: 0.22, cacheWrite5m: 2.75, cacheWrite1h: 2.75,
+                longContextThreshold: 272_000,
+                longContext: LongContextPrice(input: 4.4, output: 16.5, cacheRead: 0.44, cacheWrite5m: 5.5, cacheWrite1h: 5.5)),
+            "bedrock_mantle/openai.gpt-6-sol[1m]": ModelPrice(
+                input: 2.2, output: 11, cacheRead: 0.22, cacheWrite5m: 2.75, cacheWrite1h: 2.75,
+                longContextThreshold: 272_000,
+                longContext: LongContextPrice(input: 4.4, output: 16.5, cacheRead: 0.44, cacheWrite5m: 5.5, cacheWrite1h: 5.5)),
             // Exact-key overrides for deprecated / differently-priced model versions.
             "claude-opus-4-1":   ModelPrice(input: 15, output: 75, cacheRead: 1.50, cacheWrite5m: 18.75, cacheWrite1h: 30),
             // Exact-key overrides for models priced differently from their family bucket.
@@ -90,12 +111,29 @@ struct PricingTable: Codable, Sendable, Equatable {
             "us.anthropic.claude-opus-5":     ModelPrice(input: 5.50, output: 27.50, cacheRead: 0.55, cacheWrite5m: 6.875, cacheWrite1h: 11, fastMultiplier: 2),
             "us.anthropic.claude-opus-4-8":   ModelPrice(input: 5.50, output: 27.50, cacheRead: 0.55, cacheWrite5m: 6.875, cacheWrite1h: 11, fastMultiplier: 2),
             "us.anthropic.claude-fable-5-1":  ModelPrice(input: 11, output: 55, cacheRead: 0.28, cacheWrite5m: 13.75, cacheWrite1h: 22),
+            // Bedrock global cross-region inference (global.anthropic.*).
+            "global.anthropic.claude-sonnet-5-5": ModelPrice(input: 2, output: 10, cacheRead: 0.20, cacheWrite5m: 2.50, cacheWrite1h: 4),
         ],
         fallback: ModelPrice(input: 5, output: 25, cacheRead: 0.50, cacheWrite5m: 6.25, cacheWrite1h: 10),
         discountPercent: 0,
-        version: 5,
+        version: 6,
         webSearchCost: 0.01,
-        usOnlyMultiplier: 1.1
+        usOnlyMultiplier: 1.1,
+        // AWS cut Claude Sonnet 5.5 cache-read rates by 50% from 2026-10-07. Sources: the AWS Bedrock pricing page
+        // (https://aws.amazon.com/bedrock/pricing/) and the model cards
+        // (https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-5-5.html).
+        // The `models` entries keep the pre-change rates. They apply to requests before that day and to requests with no day.
+        // The global pre-change cache-read rate (0.20) is derived from the 50% cut, not quoted from a page.
+        modelPriceHistory: [
+            "us.anthropic.claude-sonnet-5-5": [
+                DatedModelPrice(effectiveFrom: "2026-10-07",
+                                price: ModelPrice(input: 2.2, output: 11, cacheRead: 0.11, cacheWrite5m: 2.75, cacheWrite1h: 4.4)),
+            ],
+            "global.anthropic.claude-sonnet-5-5": [
+                DatedModelPrice(effectiveFrom: "2026-10-07",
+                                price: ModelPrice(input: 2, output: 10, cacheRead: 0.10, cacheWrite5m: 2.5, cacheWrite1h: 4)),
+            ],
+        ]
     )
 
     /// Resolves the price for one model. Lookup order: the full lowercased raw key, the key without its
@@ -152,17 +190,23 @@ struct PricingTable: Codable, Sendable, Equatable {
         return base * discountMultiplier
     }
 
+    /// Exact lowercased Mantle routes whose regional Standard prices already include the domestic premium.
+    static let regionalOpenAIRoutes: Set<String> = [
+        "bedrock_mantle/openai.gpt-6.1-sol", "bedrock_mantle/openai.gpt-6.1-sol[1m]",
+        "bedrock_mantle/openai.gpt-6-sol", "bedrock_mantle/openai.gpt-6-sol[1m]",
+        "bedrock_mantle/openai.gpt-6-luna", "bedrock_mantle/openai.gpt-6-luna[1m]",
+    ]
+
     /// Combined multiplicative surcharge for fast-mode and domestic inference.
     ///
-    /// Bedrock US Anthropic prices and the two regional Mantle Sol routes include a regional premium.
+    /// Bedrock US Anthropic prices and the exact regional Mantle OpenAI routes include a regional premium.
     /// Exclude domestic inference for these routes to avoid charging the premium twice.
     func surchargeMultiplier(family: String, rawModel: String, isFast: Bool, isDomestic: Bool,
                              rateDayUTC: String? = nil) -> Double {
         let p = price(forFamily: family, rawModel: rawModel, rateDayUTC: rateDayUTC)
         let rawKey = rawModel.lowercased()
-        let isRegionalSol = rawKey == "bedrock_mantle/openai.gpt-6.1-sol"
-            || rawKey == "bedrock_mantle/openai.gpt-6.1-sol[1m]"
-        let isBedrockRegionPriced = isRegionalSol
+        let isRegionalOpenAI = Self.regionalOpenAIRoutes.contains(rawKey)
+        let isBedrockRegionPriced = isRegionalOpenAI
             || ModelNormalizer.stripProviderPrefix(rawModel).lowercased().hasPrefix("us.anthropic.")
         let fast = (isFast ? (p?.fastMultiplier ?? 1) : 1)
         let domestic = (isDomestic && !isBedrockRegionPriced) ? (usOnlyMultiplier ?? 1) : 1

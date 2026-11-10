@@ -1011,8 +1011,8 @@ final class ClaudeOMeterTests: XCTestCase {
 
     // MARK: - Version bump
 
-    func testDefaultPricingTableVersion5() {
-        XCTAssertEqual(PricingTable.default.version, 5)
+    func testDefaultPricingTableVersion6() {
+        XCTAssertEqual(PricingTable.default.version, 6)
     }
 
     /// Keep this assertion literal so reverting the migration version fails even if the new
