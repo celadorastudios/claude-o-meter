@@ -1,6 +1,6 @@
 import Foundation
 
-/// Converts ISO-8601 timestamps to local calendar-day strings ("yyyy-MM-dd").
+/// Parses ISO-8601 timestamps and keeps local display days separate from UTC pricing days.
 enum DayBucket {
     nonisolated(unsafe) private static let iso: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
@@ -22,6 +22,19 @@ enum DayBucket {
         f.dateFormat = "yyyy-MM-dd"
         return f
     }()
+
+    private static let utcDayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .gregorian)
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(secondsFromGMT: 0)
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
+
+    static func utcDay(from date: Date) -> String {
+        utcDayFormatter.string(from: date)
+    }
 
     static func date(fromDay day: String) -> Date? {
         dayFormatter.date(from: day)

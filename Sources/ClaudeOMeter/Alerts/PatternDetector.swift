@@ -117,7 +117,8 @@ enum PatternDetector {
         for agg in last7 {
             for (fam, tokens) in agg.taxableCacheRead {
                 let rawModel = agg.perModel[fam]?.rawModel ?? fam
-                contextTax += pricing.cost(of: TokenUsage(cacheRead: tokens), family: fam, rawModel: rawModel)
+                // Taxable slices do not retain original request lengths; estimate at short-context rates.
+                contextTax += pricing.cost(of: TokenUsage(cacheRead: tokens), family: fam, rawModel: rawModel, promptTokens: 0)
             }
         }
         if contextTax >= 5.0, contextTax >= last7Cost * 0.05 {
@@ -244,8 +245,9 @@ enum PatternDetector {
             for (dir, usage) in agg.perProject {
                 for (fam, tokens) in usage.taxableCacheRead {
                     let rawModel = agg.perModel[fam]?.rawModel ?? fam
+                    // Project taxable slices also lack request lengths; use the same conservative estimate.
                     taxByDir[dir, default: 0] += pricing.cost(
-                        of: TokenUsage(cacheRead: tokens), family: fam, rawModel: rawModel
+                        of: TokenUsage(cacheRead: tokens), family: fam, rawModel: rawModel, promptTokens: 0
                     )
                 }
             }

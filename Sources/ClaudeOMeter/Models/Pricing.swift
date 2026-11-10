@@ -8,6 +8,25 @@ struct ModelPrice: Codable, Sendable, Equatable {
     var cacheWrite5m: Double
     var cacheWrite1h: Double
     var fastMultiplier: Double?
+    var longContextThreshold: Int? = nil
+    var longContext: LongContextPrice? = nil
+}
+
+/// Full-request token rates used when the prompt exceeds a model's long-context threshold.
+/// Prices are USD per one million tokens; output does not count toward the threshold.
+struct LongContextPrice: Codable, Sendable, Equatable {
+    var input: Double
+    var output: Double
+    var cacheRead: Double
+    var cacheWrite5m: Double
+    var cacheWrite1h: Double
+}
+
+/// A complete model price that applies to usage on or after a UTC day.
+/// `effectiveFrom` is a `YYYY-MM-DD` calendar date in UTC.
+struct DatedModelPrice: Codable, Sendable, Equatable {
+    var effectiveFrom: String
+    var price: ModelPrice
 }
 
 /// Pricing table keyed by normalized model *family* ("opus"/"sonnet"/"haiku"),
@@ -19,12 +38,15 @@ struct PricingTable: Codable, Sendable, Equatable {
     /// Flat enterprise/committed-use discount applied to every computed cost, e.g. 15 = 15% off.
     var discountPercent: Double?
     /// Monotonically increasing integer. When the bundled version exceeds the installed version,
-    /// the installed pricing.json is auto-replaced (preserving discountPercent) on next launch.
+    /// merge bundled defaults on next launch while preserving user edits.
     var version: Int?
     /// Cost per web search request in USD.
     var webSearchCost: Double?
     /// Multiplicative surcharge for US-only/domestic-pinned inference, e.g. 1.1 = 10% surcharge.
     var usOnlyMultiplier: Double?
+    /// Dated price revisions per model key. Each key must also exist in `models`,
+    /// which holds the base price used before the key's first revision and when no day is supplied.
+    var modelPriceHistory: [String: [DatedModelPrice]]? = nil
 
     private var discountMultiplier: Double {
         let pct = max(0, min(100, discountPercent ?? 0))
@@ -42,6 +64,16 @@ struct PricingTable: Codable, Sendable, Equatable {
             "luna":   ModelPrice(input: 1.1, output: 6.6, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0),
             "terra":  ModelPrice(input: 2.75, output: 16.5, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0),
             "sol":    ModelPrice(input: 5.5, output: 33, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0),
+            // Bedrock Mantle regional Standard rates. [1m] changes capacity, not billing.
+            // Sol supports only a 30-minute TTL; both transcript cache-write buckets use its single write tariff.
+            "bedrock_mantle/openai.gpt-6.1-sol": ModelPrice(
+                input: 2.2, output: 11, cacheRead: 0.11, cacheWrite5m: 2.75, cacheWrite1h: 2.75,
+                longContextThreshold: 272_000,
+                longContext: LongContextPrice(input: 4.4, output: 16.5, cacheRead: 0.22, cacheWrite5m: 5.5, cacheWrite1h: 5.5)),
+            "bedrock_mantle/openai.gpt-6.1-sol[1m]": ModelPrice(
+                input: 2.2, output: 11, cacheRead: 0.11, cacheWrite5m: 2.75, cacheWrite1h: 2.75,
+                longContextThreshold: 272_000,
+                longContext: LongContextPrice(input: 4.4, output: 16.5, cacheRead: 0.22, cacheWrite5m: 5.5, cacheWrite1h: 5.5)),
             // Exact-key overrides for deprecated / differently-priced model versions.
             "claude-opus-4-1":   ModelPrice(input: 15, output: 75, cacheRead: 1.50, cacheWrite5m: 18.75, cacheWrite1h: 30),
             // Exact-key overrides for models priced differently from their family bucket.
@@ -61,29 +93,60 @@ struct PricingTable: Codable, Sendable, Equatable {
         ],
         fallback: ModelPrice(input: 5, output: 25, cacheRead: 0.50, cacheWrite5m: 6.25, cacheWrite1h: 10),
         discountPercent: 0,
-        version: 4,
+        version: 5,
         webSearchCost: 0.01,
         usOnlyMultiplier: 1.1
     )
 
-    func price(forFamily family: String, rawModel: String) -> ModelPrice? {
-        let stripped = ModelNormalizer.stripProviderPrefix(rawModel)
-        if let exact = models[stripped.lowercased()] { return exact }
-        if let exact = models[rawModel.lowercased()] { return exact }
-        if let fam = models[family] { return fam }
-        return fallback
+    /// Resolves the price for one model. Lookup order: the full lowercased raw key, the key without its
+    /// provider prefix, the family, then the fallback. The first match in `models` wins, so an exact key never loses to a family.
+    /// `rateDayUTC` (a `YYYY-MM-DD` UTC day) picks the matched key's latest revision on or before that day.
+    /// A nil, empty or malformed day, or a day before the first revision, uses the undated base price.
+    func price(forFamily family: String, rawModel: String, rateDayUTC: String? = nil) -> ModelPrice? {
+        let rawKey = rawModel.lowercased()
+        let strippedKey = ModelNormalizer.stripProviderPrefix(rawModel).lowercased()
+        let key: String
+        if models[rawKey] != nil {
+            key = rawKey
+        } else if models[strippedKey] != nil {
+            key = strippedKey
+        } else if models[family] != nil {
+            key = family
+        } else {
+            return fallback
+        }
+        return revisedPrice(forKey: key, rateDayUTC: rateDayUTC) ?? models[key]
+    }
+
+    /// The latest revision of `key` that is effective on or before `rateDayUTC`, or nil when none applies.
+    private func revisedPrice(forKey key: String, rateDayUTC: String?) -> ModelPrice? {
+        guard let day = rateDayUTC, isValidUTCDay(day), let revisions = modelPriceHistory?[key] else { return nil }
+        return revisions
+            .filter { $0.effectiveFrom <= day }
+            .max { $0.effectiveFrom < $1.effectiveFrom }?
+            .price
     }
 
     /// Cost in USD for a usage bundle attributed to a model family.
-    func cost(of usage: TokenUsage, family: String, rawModel: String) -> Double {
+    /// For usage summed from requests with the same prompt length, supply that promptTokens value.
+    /// Otherwise, all input and cache buckets count toward the threshold, but output does not.
+    func cost(of usage: TokenUsage, family: String, rawModel: String, promptTokens: Int? = nil,
+              rateDayUTC: String? = nil) -> Double {
         guard family != ModelNormalizer.syntheticFamily,
-              let p = price(forFamily: family, rawModel: rawModel) else { return 0 }
+              let p = price(forFamily: family, rawModel: rawModel, rateDayUTC: rateDayUTC) else { return 0 }
+        let promptCount = promptTokens ?? usage.promptTokens
+        let longRates: LongContextPrice?
+        if let threshold = p.longContextThreshold, promptCount > threshold {
+            longRates = p.longContext
+        } else {
+            longRates = nil
+        }
         let m = 1_000_000.0
-        let inputCost    = Double(usage.input)        / m * p.input
-        let outputCost   = Double(usage.output)       / m * p.output
-        let cacheRdCost  = Double(usage.cacheRead)    / m * p.cacheRead
-        let cache5mCost  = Double(usage.cacheWrite5m) / m * p.cacheWrite5m
-        let cache1hCost  = Double(usage.cacheWrite1h) / m * p.cacheWrite1h
+        let inputCost    = Double(usage.input)        / m * (longRates?.input ?? p.input)
+        let outputCost   = Double(usage.output)       / m * (longRates?.output ?? p.output)
+        let cacheRdCost  = Double(usage.cacheRead)    / m * (longRates?.cacheRead ?? p.cacheRead)
+        let cache5mCost  = Double(usage.cacheWrite5m) / m * (longRates?.cacheWrite5m ?? p.cacheWrite5m)
+        let cache1hCost  = Double(usage.cacheWrite1h) / m * (longRates?.cacheWrite1h ?? p.cacheWrite1h)
         let webCost      = Double(usage.webSearchRequests) * (webSearchCost ?? 0)
         let base = inputCost + outputCost + cacheRdCost + cache5mCost + cache1hCost + webCost
         return base * discountMultiplier
@@ -91,17 +154,105 @@ struct PricingTable: Codable, Sendable, Equatable {
 
     /// Combined multiplicative surcharge for fast-mode and domestic inference.
     ///
-    /// `isDomestic` is excluded here when `rawModel` already resolved to a Bedrock-region exact-key
-    /// price (`us.anthropic.*`), which already bakes in its own regional markup — applying
-    /// `usOnlyMultiplier` on top would double-charge the same real-world surcharge. In practice the two
-    /// signals haven't been observed to co-occur on a single record (Bedrock-routed calls don't appear
-    /// to populate `inference_geo`), but nothing guarantees that stays true, so this guard is defensive.
-    func surchargeMultiplier(family: String, rawModel: String, isFast: Bool, isDomestic: Bool) -> Double {
-        let p = price(forFamily: family, rawModel: rawModel)
-        let isBedrockRegionPriced = ModelNormalizer.stripProviderPrefix(rawModel).lowercased().hasPrefix("us.anthropic.")
+    /// Bedrock US Anthropic prices and the two regional Mantle Sol routes include a regional premium.
+    /// Exclude domestic inference for these routes to avoid charging the premium twice.
+    func surchargeMultiplier(family: String, rawModel: String, isFast: Bool, isDomestic: Bool,
+                             rateDayUTC: String? = nil) -> Double {
+        let p = price(forFamily: family, rawModel: rawModel, rateDayUTC: rateDayUTC)
+        let rawKey = rawModel.lowercased()
+        let isRegionalSol = rawKey == "bedrock_mantle/openai.gpt-6.1-sol"
+            || rawKey == "bedrock_mantle/openai.gpt-6.1-sol[1m]"
+        let isBedrockRegionPriced = isRegionalSol
+            || ModelNormalizer.stripProviderPrefix(rawModel).lowercased().hasPrefix("us.anthropic.")
         let fast = (isFast ? (p?.fastMultiplier ?? 1) : 1)
         let domestic = (isDomestic && !isBedrockRegionPriced) ? (usOnlyMultiplier ?? 1) : 1
         return fast * domestic
+    }
+}
+
+/// True for a real calendar date written as `YYYY-MM-DD` (ASCII digits only, leap years handled).
+fileprivate func isValidUTCDay(_ day: String) -> Bool {
+    let parts = day.split(separator: "-", omittingEmptySubsequences: false)
+    guard parts.count == 3, parts[0].count == 4, parts[1].count == 2, parts[2].count == 2,
+          parts.allSatisfy({ $0.allSatisfy { $0.isASCII && $0.isNumber } }),
+          let year = Int(parts[0]), let month = Int(parts[1]), let dayOfMonth = Int(parts[2]),
+          (1...12).contains(month) else { return false }
+    let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+    let daysInMonth = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1]
+    return (1...daysInMonth).contains(dayOfMonth)
+}
+
+extension PricingTable {
+    /// Decodes a table and rejects an invalid `modelPriceHistory` instead of ignoring it.
+    /// Tables without history decode as before, because the new field is optional.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        models = try c.decode([String: ModelPrice].self, forKey: .models)
+        fallback = try c.decodeIfPresent(ModelPrice.self, forKey: .fallback)
+        discountPercent = try c.decodeIfPresent(Double.self, forKey: .discountPercent)
+        version = try c.decodeIfPresent(Int.self, forKey: .version)
+        webSearchCost = try c.decodeIfPresent(Double.self, forKey: .webSearchCost)
+        usOnlyMultiplier = try c.decodeIfPresent(Double.self, forKey: .usOnlyMultiplier)
+        modelPriceHistory = try c.decodeIfPresent([String: [DatedModelPrice]].self, forKey: .modelPriceHistory)
+        try validateHistory(modelPriceHistory, in: c)
+    }
+
+    /// Checks each revision list. Keys must be lowercase and exist in `models`, so a revision
+    /// never hides a base price that a reader cannot see. Each day must be a real `YYYY-MM-DD`,
+    /// and no two revisions of one key may share a day. Revised rates must be finite and nonnegative.
+    private func validateHistory(_ history: [String: [DatedModelPrice]]?,
+                                 in c: KeyedDecodingContainer<CodingKeys>) throws {
+        guard let history else { return }
+        for (key, revisions) in history {
+            let path = c.codingPath
+            guard key == key.lowercased() else {
+                throw DecodingError.dataCorrupted(.init(codingPath: path,
+                    debugDescription: "modelPriceHistory key '\(key)' must be lowercase"))
+            }
+            guard models[key] != nil else {
+                throw DecodingError.dataCorrupted(.init(codingPath: path,
+                    debugDescription: "modelPriceHistory key '\(key)' has no base price in models"))
+            }
+            var seenDays = Set<String>()
+            for revision in revisions {
+                guard isValidUTCDay(revision.effectiveFrom) else {
+                    throw DecodingError.dataCorrupted(.init(codingPath: path,
+                        debugDescription: "modelPriceHistory '\(key)' has invalid effectiveFrom '\(revision.effectiveFrom)'"))
+                }
+                guard seenDays.insert(revision.effectiveFrom).inserted else {
+                    throw DecodingError.dataCorrupted(.init(codingPath: path,
+                        debugDescription: "modelPriceHistory '\(key)' repeats effectiveFrom '\(revision.effectiveFrom)'"))
+                }
+                try revision.price.validateRates(path: path, key: key)
+            }
+        }
+    }
+}
+
+extension ModelPrice {
+    /// Rejects a negative or non-finite rate, a negative long-context threshold, and a tier with no threshold (or the reverse).
+    fileprivate func validateRates(path: [CodingKey], key: String) throws {
+        let rates = [input, output, cacheRead, cacheWrite5m, cacheWrite1h, fastMultiplier ?? 0]
+        guard rates.allSatisfy({ $0.isFinite && $0 >= 0 }) else {
+            throw DecodingError.dataCorrupted(.init(codingPath: path,
+                debugDescription: "modelPriceHistory '\(key)' has a negative or non-finite rate"))
+        }
+        guard (longContextThreshold == nil) == (longContext == nil) else {
+            throw DecodingError.dataCorrupted(.init(codingPath: path,
+                debugDescription: "modelPriceHistory '\(key)' sets longContext without longContextThreshold, or the reverse"))
+        }
+        // Zero is allowed: the tier applies when the prompt is strictly greater than the threshold.
+        if let threshold = longContextThreshold, threshold < 0 {
+            throw DecodingError.dataCorrupted(.init(codingPath: path,
+                debugDescription: "modelPriceHistory '\(key)' has a negative longContextThreshold"))
+        }
+        if let tier = longContext {
+            let tierRates = [tier.input, tier.output, tier.cacheRead, tier.cacheWrite5m, tier.cacheWrite1h]
+            guard tierRates.allSatisfy({ $0.isFinite && $0 >= 0 }) else {
+                throw DecodingError.dataCorrupted(.init(codingPath: path,
+                    debugDescription: "modelPriceHistory '\(key)' has a negative or non-finite long-context rate"))
+            }
+        }
     }
 }
 
