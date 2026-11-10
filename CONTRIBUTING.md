@@ -80,4 +80,19 @@ Open a GitHub issue with:
 
 ## Pricing updates
 
-The default pricing table lives in `Sources/ClaudeOMeter/Resources/pricing.json`. If Anthropic publishes new rates, open a PR updating that file with a link to the source. Users override their personal copy in `~/Library/Application Support/ClaudeOMeter/pricing.json` — the bundled file only seeds new installs.
+The default pricing table lives in `Sources/ClaudeOMeter/Resources/pricing.json`.
+Update it and `PricingTable.default` together, with a link to the rate source, and bump both pricing versions.
+Use exact lowercase model IDs for route-specific rates; full IDs take priority over provider-stripped IDs.
+The existing `longContextThreshold` and `longContext` fields support two whole-request prompt-length bands.
+Use `modelPriceHistory` for complete model prices effective from a documented inclusive UTC date; do not infer a customer price-change date from an AWS bulk publication date.
+See the README pricing example for the schema and date validation rules.
+
+Users can edit their copy in `~/Library/Application Support/ClaudeOMeter/pricing.json`.
+The bundled table seeds new installs.
+On upgrades, `pricing-defaults.json` identifies unchanged defaults that can be updated safely; custom prices, histories, discounts, and settings are preserved.
+The first upgrade without that baseline preserves existing values and adds missing entries.
+An upgrade backs up the editable file before writing, and an invalid editable file is not overwritten.
+
+Retained pricing groups let reloads recalculate model costs, project costs, and surcharges with their original UTC dates and prompt lengths.
+Startup compares pricing content, not only its version number.
+If a new billing rule needs inputs that stored groups do not contain, bump `Persistence.currentDataVersion` to rebuild history from surviving transcripts.

@@ -138,9 +138,102 @@ Edit that file and click **Settings → Reload pricing** to apply changes withou
 
 `claude-opus-4-1` (deprecated model) keeps its legacy $15/$75 rate via an exact-key override.
 
+GPT-6.1 Sol on `bedrock_mantle/openai.gpt-6.1-sol` has an exact override for [AWS regional Standard pricing](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-1-sol.html).
+The same rates apply to its `[1m]` variant; the suffix does not select a billing tier.
+
+| Request input tokens | Input | Output | Cache Read | Cache Write (30m) |
+|----------------------|------:|-------:|-----------:|------------------:|
+| Up to 272,000 | $2.20 | $11.00 | $0.11 | $2.75 |
+| More than 272,000 | $4.40 | $16.50 | $0.22 | $5.50 |
+
+The input threshold includes fresh input, cache reads, and cache writes, but not output tokens.
+Above the threshold, the higher rates apply to the whole request.
+The scanner stores unsplit 30-minute cache writes in the existing `cacheWrite5m` bucket.
+Both transcript cache-write buckets use Sol's single 30-minute write rate; a `cacheWrite1h` label does not make those tokens free or imply a supported one-hour TTL.
+Only these two routed model IDs receive this override; older Sol models retain the family rates above.
+Global inference and Ultrafast pricing are not covered by this override.
+
 **Enterprise / EDP discount:** set `"discountPercent": 20` in `pricing.json` for 20% off all computed costs.
 
-When a new build ships with corrected rates, the app auto-upgrades your local `pricing.json` on first launch while preserving your `discountPercent`.
+### Configure model prices and price changes
+
+An exact entry in `models` can price a new model without a code change.
+The lookup checks the full model ID first, then the ID without its provider prefix, then its family, then the fallback.
+Use lowercase keys and explicit entries for differently billed routes.
+An unfamiliar model family can still display as `Unknown*` even when an exact entry supplies its prices.
+
+The optional `longContextThreshold` and `longContext` fields configure two whole-request price bands.
+The threshold counts fresh input and all cache tokens, not output.
+Requests above the threshold use the higher band for every token.
+Use these fields only when the provider documents those rules.
+Cache-write fields price the reported transcript buckets; they do not infer an unreported cache lifetime.
+
+To change rates from a known date, add complete prices under `modelPriceHistory` for the same model key.
+Each `effectiveFrom` is an inclusive UTC date in `YYYY-MM-DD` format.
+The latest revision on or before the request's UTC date applies.
+The base entry in `models` applies before the first revision or when the request date is unknown.
+A revision replaces the whole model price, including any context band and fast multiplier; it does not inherit omitted fields.
+
+This example uses hypothetical rates, not a provider price list:
+
+```json
+{
+  "models": {
+    "vendor/example-model": {
+      "input": 2,
+      "output": 10,
+      "cacheRead": 0.2,
+      "cacheWrite5m": 2.5,
+      "cacheWrite1h": 4
+    }
+  },
+  "modelPriceHistory": {
+    "vendor/example-model": [
+      {
+        "effectiveFrom": "2026-11-01",
+        "price": {
+          "input": 2,
+          "output": 10,
+          "cacheRead": 0.1,
+          "cacheWrite5m": 2.5,
+          "cacheWrite1h": 4
+        }
+      }
+    ]
+  }
+}
+```
+
+Add these entries to your existing file; do not replace the whole table with the example.
+Edit a base entry to correct a rate for all recorded dates that have no applicable revision.
+Add a dated revision for a real price change, so earlier requests keep their earlier rates.
+Dates must be real calendar dates, must not repeat for one model key, and must have a corresponding base entry.
+Revised rates must be nonnegative, and a revised context band must include both its threshold and rates.
+Base entries still use the permissive legacy decoder; check that a base context band includes both fields, because an incomplete band uses short rates without a validation error.
+Prices are configured locally; the app does not fetch provider prices.
+
+### Pricing upgrades and stored history
+
+A newer bundled pricing version adds new model entries and updates defaults that the user has not edited.
+The app uses `pricing-defaults.json` beside the editable file to identify the previous defaults.
+It preserves custom model prices, dated revisions, discounts, and table settings, and backs up `pricing.json` before an upgrade.
+On the first upgrade without a recorded baseline, it preserves existing prices because it cannot tell defaults from custom edits.
+Existing short-only overrides therefore stay short-only; add verified context bands explicitly if you want them.
+A malformed editable file is left unchanged; the app logs the error and uses bundled prices in memory.
+
+The accounting upgrade rebuilds stored history from surviving local transcripts once, including project totals.
+No manual reset is needed.
+Deleted transcripts cannot be rebuilt during that migration.
+After the upgrade, model and project usage retain the original UTC rate day, prompt length, and surcharge flags, so later pricing changes can recalculate retained history without reading the transcripts again.
+Charts still group costs by local calendar day.
+The retained pricing groups contain token totals, not message IDs, message text, or full timestamps, and expire with the 31-day history window.
+Exact prompt lengths can produce nearly one group per request, stored for each model and project.
+This increases snapshot size and save time, but preserves the inputs needed if a model later gains a context band.
+
+Reload pricing recalculates model totals, project totals, and surcharges.
+Startup also detects pricing-content changes even when the pricing version is unchanged.
+Legacy aggregates without the required pricing inputs use conservative model estimates and retain stored project dollars until a full rescan.
+The context-bloat advisory remains a conservative short-context estimate because its taxable token slices do not retain request lengths or UTC rate dates.
 
 **Verify rates against your own contract** — Bedrock and Vertex rates differ from API list prices.
 
