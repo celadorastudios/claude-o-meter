@@ -895,9 +895,9 @@ final class ClaudeOMeterTests: XCTestCase {
         XCTAssertEqual(model?.surchargeUSD ?? 0, basePer, accuracy: 1e-9)
     }
 
-    // MARK: - Recost preserves surchargeUSD
+    // MARK: - Recost recalculates surchargeUSD
 
-    func testRecostPreservesSurcharge() {
+    func testRecostRecalculatesSurcharge() {
         var pricing = PricingTable.default
 
         var aggs: [String: DailyAggregate] = [:]
@@ -917,9 +917,9 @@ final class ClaudeOMeterTests: XCTestCase {
 
         let newCost = aggs["2026-06-20"]?.perModel["opus"]?.cost ?? 0
         let newSurcharge = aggs["2026-06-20"]?.perModel["opus"]?.surchargeUSD ?? 0
-        // surchargeUSD preserved at $5 (not recomputed at new rate), base recosted to $8 → $8 + $5 = $13
-        XCTAssertEqual(newSurcharge, 5.0, accuracy: 1e-9)
-        XCTAssertEqual(newCost, 13.0, accuracy: 1e-9)
+        // Retained fast-mode attribution reprices both the base and its surcharge.
+        XCTAssertEqual(newSurcharge, 8.0, accuracy: 1e-9)
+        XCTAssertEqual(newCost, 16.0, accuracy: 1e-9)
     }
 
     // MARK: - Backward compatibility: pre-change pricing.json decodes through new types
@@ -1011,17 +1011,14 @@ final class ClaudeOMeterTests: XCTestCase {
 
     // MARK: - Version bump
 
-    func testDefaultPricingTableVersion4() {
-        XCTAssertEqual(PricingTable.default.version, 4)
+    func testDefaultPricingTableVersion7() {
+        XCTAssertEqual(PricingTable.default.version, 7)
     }
 
-    /// Hardcoded (not parametrized against the live constant) on purpose: this is the exact
-    /// class of mistake this PR fixed once already (fold-time cost logic changed without a
-    /// matching currentDataVersion bump, so stale pre-fix aggregates never got re-folded). A
-    /// test that compares `Persistence.currentDataVersion` against itself can never fail if a
-    /// future change reverts just the bump while keeping new fold-time-only fields — this one can.
-    func testCurrentDataVersionIsAtLeast4() {
-        XCTAssertEqual(Persistence.currentDataVersion, 4,
+    /// Keep this assertion literal so reverting the migration version fails even if the new
+    /// fold-time fields remain. Comparing the version constant with itself cannot detect that error.
+    func testCurrentDataVersionIs6() {
+        XCTAssertEqual(Persistence.currentDataVersion, 6,
                         "currentDataVersion must be bumped whenever fold-time cost logic changes " +
                         "(see this constant's doc comment) — bumping it is what forces already-" +
                         "persisted aggregates to be re-folded under the corrected logic")

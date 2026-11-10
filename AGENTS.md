@@ -27,8 +27,8 @@ One-way data flow: `TranscriptScanner → Aggregator → UsageStore → SwiftUI 
 - **`TranscriptScanner`** — reads `~/.claude/projects/**/*.jsonl` incrementally via per-file byte cursors (`ScanState.cursors`); global dedup by `message.id` in `ScanState.seenIDs`.
 - **`Aggregator`** — pure fold of `[UsageRecord]` → `[String: DailyAggregate]`, no side effects (trivially testable).
 - **`UsageStore`** (`@MainActor`) — single source of truth; a 60s timer scans off-main, then `apply()` folds new records, prunes, fires alerts/tips, and persists.
-- **`Persistence`** — owns `~/Library/Application Support/ClaudeOMeter/`: `state.json` (full snapshot) + user-editable `pricing.json`.
-- **`PricingTable`** (`Pricing.swift`) — exact raw-model key → family key → fallback; `Aggregator.recost` re-applies exact prices after a pricing reload.
+- **`Persistence`** — owns `~/Library/Application Support/ClaudeOMeter/`: `state.json` (full snapshot), user-editable `pricing.json`, and `pricing-defaults.json` (the bundled upgrade baseline).
+- **`PricingTable`** (`Pricing.swift`) — full raw-model key → provider-stripped key → family key → fallback, followed by the selected key's UTC-dated revision; `Aggregator.recost` recalculates model and project costs from retained pricing inputs.
 
 ## Key invariants
 

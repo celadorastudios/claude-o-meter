@@ -138,9 +138,141 @@ Edit that file and click **Settings → Reload pricing** to apply changes withou
 
 `claude-opus-4-1` (deprecated model) keeps its legacy $15/$75 rate via an exact-key override.
 
+The exact Mantle routes for [GPT-6.1 Sol](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-1-sol.html), [GPT-6 Sol](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-sol.html), and [GPT-6 Luna](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-luna.html) use AWS regional Standard prices.
+Their keys are `bedrock_mantle/openai.gpt-6.1-sol`, `bedrock_mantle/openai.gpt-6-sol`, and `bedrock_mantle/openai.gpt-6-luna`.
+Each has an explicit `[1m]` variant with the same rates; the suffix changes capacity, not the billing tier.
+
+| Model | Request input tokens | Input | Output | Cache Read | Cache Write (30m) |
+|---|---|------:|-------:|-----------:|------------------:|
+| GPT-6.1 Sol | Up to 272,000 | $2.20 | $11.00 | $0.11 | $2.75 |
+| GPT-6.1 Sol | More than 272,000 | $4.40 | $16.50 | $0.22 | $5.50 |
+| GPT-6 Sol | Up to 272,000 | $2.20 | $11.00 | $0.22 | $2.75 |
+| GPT-6 Sol | More than 272,000 | $4.40 | $16.50 | $0.44 | $5.50 |
+| GPT-6 Luna | Up to 272,000 | $0.11 | $0.55 | $0.011 | $0.1375 |
+| GPT-6 Luna | More than 272,000 | $0.22 | $0.825 | $0.022 | $0.275 |
+
+The input threshold includes fresh input, cache reads, and cache writes, but not output tokens.
+Above the threshold, the higher rates apply to the whole request.
+The scanner stores unsplit 30-minute cache writes in the existing `cacheWrite5m` bucket.
+Both transcript cache-write buckets use the model's single 30-minute write rate; a `cacheWrite1h` label does not make those tokens free or imply a supported one-hour TTL.
+These regional prices already include the premium, so the domestic flag does not add it again for these six exact routes.
+Other OpenAI routes retain their existing lookup behavior; Global inference and Ultrafast are not covered by these overrides.
+
+The Bedrock Sonnet 5.5 entries also include [AWS's cache-read price reduction](https://aws.amazon.com/bedrock/pricing/) from October 7, 2026.
+For `us.anthropic.claude-sonnet-5-5`, cache reads cost $0.22/M before that UTC date and $0.11/M from that date.
+For `global.anthropic.claude-sonnet-5-5`, they cost $0.20/M before that date and $0.10/M from that date.
+The prior Global read rate follows from the documented 50% reduction.
+Other token rates are unchanged, and a missing request date uses the earlier base price.
+These dated entries do not change the bare direct-API entry `claude-sonnet-5-5` or the generic family defaults.
+
+Haiku 5.5 has exact entries for the direct API, Bedrock US, and Bedrock Global routes.
+Rates below are USD / 1M tokens; the broad `haiku` family default is unchanged.
+
+| Route | Request prompt tokens | Input | Output | Cache Read | Cache Write (5m) | Cache Write (1h) |
+|---|---|------:|-------:|-----------:|-----------------:|-----------------:|
+| `claude-haiku-5-5` | Up to 100,000 | $0.10 | $0.50 | $0.01 | $0.125 | $0.20 |
+| `claude-haiku-5-5` | More than 100,000 | $0.50 | $2.50 | $0.05 | $0.625 | $1.00 |
+| `us.anthropic.claude-haiku-5-5` | Up to 100,000 | $0.11 | $0.55 | $0.011 | $0.1375 | $0.22 |
+| `us.anthropic.claude-haiku-5-5` | More than 100,000 | $0.55 | $2.75 | $0.055 | $0.6875 | $1.10 |
+| `global.anthropic.claude-haiku-5-5` | Up to 100,000 | $0.10 | $0.50 | $0.01 | $0.125 | $0.20 |
+| `global.anthropic.claude-haiku-5-5` | More than 100,000 | $0.50 | $2.50 | $0.05 | $0.625 | $1.00 |
+
+[Anthropic's pricing documentation](https://platform.claude.com/docs/en/about-claude/pricing) explicitly defines a cache-inclusive, per-request band.
+The Bedrock entries use the [AWS Haiku 5.5 model card's](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-haiku-5-5.html) matching threshold and token-category rule with that prompt definition, and [AWS's published prices](https://aws.amazon.com/bedrock/pricing/).
+The prompt count includes fresh input, cache reads, and all cache writes, but excludes output.
+Only prompts above 100,000 tokens use the higher rates, which apply to the whole request.
+The US rates already include the regional premium, so the domestic flag does not add it again.
+These entries have no dated price revisions.
+
+The bare `claude-haiku-5-5` ID uses direct-API prices; it does not imply US routing.
+A separate spend tool configured with US rates can report 10% more for that bare ID.
+If a proxy strips the route from transcript IDs, add an exact override for the reported ID using your contract's rates.
+
+This table is not a complete AWS price catalog.
+GPT-6.1 Terra and GPT-5.6 route-specific updates are not bundled because their complete context-band rules have not been established for this calculation.
+Other Haiku geography and Mantle routes are not verified by these entries.
+
 **Enterprise / EDP discount:** set `"discountPercent": 20` in `pricing.json` for 20% off all computed costs.
 
-When a new build ships with corrected rates, the app auto-upgrades your local `pricing.json` on first launch while preserving your `discountPercent`.
+### Configure model prices and price changes
+
+An exact entry in `models` can price a new model without a code change.
+The lookup checks the full model ID first, then the ID without its provider prefix, then its family, then the fallback.
+Use lowercase keys and explicit entries for differently billed routes.
+An unfamiliar model family can still display as `Unknown*` even when an exact entry supplies its prices.
+
+The optional `longContextThreshold` and `longContext` fields configure two whole-request price bands.
+The threshold counts fresh input and all cache tokens, not output.
+Requests above the threshold use the higher band for every token.
+Use these fields only when the provider documents those rules.
+Cache-write fields price the reported transcript buckets; they do not infer an unreported cache lifetime.
+
+To change rates from a known date, add complete prices under `modelPriceHistory` for the same model key.
+Each `effectiveFrom` is an inclusive UTC date in `YYYY-MM-DD` format.
+The latest revision on or before the request's UTC date applies.
+The base entry in `models` applies before the first revision or when the request date is unknown.
+A revision replaces the whole model price, including any context band and fast multiplier; it does not inherit omitted fields.
+
+This example uses hypothetical rates, not a provider price list:
+
+```json
+{
+  "models": {
+    "vendor/example-model": {
+      "input": 2,
+      "output": 10,
+      "cacheRead": 0.2,
+      "cacheWrite5m": 2.5,
+      "cacheWrite1h": 4
+    }
+  },
+  "modelPriceHistory": {
+    "vendor/example-model": [
+      {
+        "effectiveFrom": "2026-11-01",
+        "price": {
+          "input": 2,
+          "output": 10,
+          "cacheRead": 0.1,
+          "cacheWrite5m": 2.5,
+          "cacheWrite1h": 4
+        }
+      }
+    ]
+  }
+}
+```
+
+Add these entries to your existing file; do not replace the whole table with the example.
+Edit a base entry to correct a rate for all recorded dates that have no applicable revision.
+Add a dated revision for a real price change, so earlier requests keep their earlier rates.
+Dates must be real calendar dates, must not repeat for one model key, and must have a corresponding base entry.
+Revised rates must be nonnegative, and a revised context band must include both its threshold and rates.
+Base entries still use the permissive legacy decoder; check that a base context band includes both fields, because an incomplete band uses short rates without a validation error.
+Prices are configured locally; the app does not fetch provider prices.
+
+### Pricing upgrades and stored history
+
+A newer bundled pricing version adds new model entries and updates defaults that the user has not edited.
+The app uses `pricing-defaults.json` beside the editable file to identify the previous defaults.
+It preserves custom model prices, dated revisions, discounts, and table settings, and backs up `pricing.json` before an upgrade.
+On the first upgrade without a recorded baseline, it preserves existing prices because it cannot tell defaults from custom edits.
+Existing short-only overrides therefore stay short-only; add verified context bands explicitly if you want them.
+A malformed editable file is left unchanged; the app logs the error and uses bundled prices in memory.
+
+The accounting upgrade rebuilds stored history from surviving local transcripts once, including project totals.
+No manual reset is needed.
+Deleted transcripts cannot be rebuilt during that migration.
+After the upgrade, model and project usage retain the original UTC rate day, prompt length, and surcharge flags, so later pricing changes can recalculate retained history without reading the transcripts again.
+Charts still group costs by local calendar day.
+The retained pricing groups contain token totals, not message IDs, message text, or full timestamps, and expire with the 31-day history window.
+Exact prompt lengths can produce nearly one group per request, stored for each model and project.
+This increases snapshot size and save time, but preserves the inputs needed if a model later gains a context band.
+
+Reload pricing recalculates model totals, project totals, and surcharges.
+Startup also detects pricing-content changes even when the pricing version is unchanged.
+Legacy aggregates without the required pricing inputs use conservative model estimates and retain stored project dollars until a full rescan.
+The context-bloat advisory remains a conservative short-context estimate because its taxable token slices do not retain request lengths or UTC rate dates.
 
 **Verify rates against your own contract** — Bedrock and Vertex rates differ from API list prices.
 

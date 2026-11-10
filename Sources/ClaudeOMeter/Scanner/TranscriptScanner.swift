@@ -80,7 +80,7 @@ struct TranscriptScanner: Sendable {
                 state.seenIDs[rec.id] = rec.day
                 rec = UsageRecord(id: rec.id, day: rec.day, hour: rec.hour, model: rec.model,
                                   rawModel: rec.rawModel, usage: rec.usage, projectDir: projectDir,
-                                  isFast: rec.isFast, isDomestic: rec.isDomestic)
+                                  isFast: rec.isFast, isDomestic: rec.isDomestic, rateDayUTC: rec.rateDayUTC)
                 records.append(rec)
             }
 
@@ -186,17 +186,21 @@ struct TranscriptScanner: Sendable {
               let usageDict = message["usage"] as? [String: Any],
               let id = message["id"] as? String,
               let ts = obj["timestamp"] as? String,
-              let day = DayBucket.localDay(fromISO: ts)
+              let date = DayBucket.date(fromISO: ts)
         else { return nil }
+
+        let day = DayBucket.localDay(from: date)
+        let rateDayUTC = DayBucket.utcDay(from: date)
 
         let rawModel = (message["model"] as? String) ?? "unknown"
         let family = ModelNormalizer.family(for: rawModel)
         let usage = parseUsage(usageDict)
         let isFast = (usageDict["speed"] as? String) == "fast"
         let isDomestic = (usageDict["inference_geo"] as? String) == "us"
-        let hour = DayBucket.date(fromISO: ts).map { Calendar.current.component(.hour, from: $0) } ?? 0
+        let hour = Calendar.current.component(.hour, from: date)
         return UsageRecord(id: id, day: day, hour: hour, model: family, rawModel: rawModel,
-                           usage: usage, projectDir: "", isFast: isFast, isDomestic: isDomestic)
+                           usage: usage, projectDir: "", isFast: isFast, isDomestic: isDomestic,
+                           rateDayUTC: rateDayUTC)
     }
 
     /// Derive a human-readable project name from an encoded Claude project directory name.
@@ -249,8 +253,8 @@ struct TranscriptScanner: Sendable {
                       let usageDict = msg["usage"] as? [String: Any],
                       let id = msg["id"] as? String,
                       let ts = obj["timestamp"] as? String,
-                      let recordDay = DayBucket.localDay(fromISO: ts),
-                      recordDay == day,
+                      let date = DayBucket.date(fromISO: ts),
+                      DayBucket.localDay(from: date) == day,
                       !seen.contains(id)
                 else { continue }
 
@@ -258,16 +262,17 @@ struct TranscriptScanner: Sendable {
                 let rawModel = (msg["model"] as? String) ?? "unknown"
                 let family = ModelNormalizer.family(for: rawModel)
                 let usage = parseUsage(usageDict)
-                let baseCost = pricing.cost(of: usage, family: family, rawModel: rawModel)
+                let rateDayUTC = DayBucket.utcDay(from: date)
+                let baseCost = pricing.cost(of: usage, family: family, rawModel: rawModel, rateDayUTC: rateDayUTC)
                 let isFast = (usageDict["speed"] as? String) == "fast"
                 let isDomestic = (usageDict["inference_geo"] as? String) == "us"
                 let multiplier = pricing.surchargeMultiplier(
-                    family: family, rawModel: rawModel, isFast: isFast, isDomestic: isDomestic)
+                    family: family, rawModel: rawModel, isFast: isFast, isDomestic: isDomestic,
+                    rateDayUTC: rateDayUTC)
                 let cost = baseCost * multiplier
                 guard cost > 0 else { continue }
 
-                let date = DayBucket.date(fromISO: ts)
-                let hour = date.map { Calendar.current.component(.hour, from: $0) } ?? 0
+                let hour = Calendar.current.component(.hour, from: date)
                 byHour[hour]?.cost += cost
                 byHour[hour]?.perModel[family, default: 0] += cost
             }

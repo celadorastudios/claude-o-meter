@@ -93,19 +93,15 @@ final class UsageStore: ObservableObject {
         // and deduped message IDs are never re-folded otherwise). See Persistence.migrate.
         let migration = Persistence.migrate(snapshot)
         if migration.didMigrate {
-            AppLog.shared.info("migrating to dataVersion \(Persistence.currentDataVersion): clearing scan state to backfill context-tax tokens", category: "migration")
+            AppLog.shared.info("migrating to dataVersion \(Persistence.currentDataVersion): rebuilding usage aggregates", category: "migration")
             snapshot = migration.snapshot
             Persistence.save(snapshot)
         }
 
-        // If the loaded pricing is newer than what was used to compute the cached
-        // aggregates, reapply costs now so stale prices never reach the display
-        // layer.  This covers the case where the app is rebuilt with a corrected
-        // pricing.json but state.json still holds aggregates from the old rates.
-        let loadedVersion = pricing.version ?? 0
-        if loadedVersion > snapshot.pricingVersion {
-            Aggregator.recost(&snapshot.aggregates, pricing: pricing)
-            snapshot.pricingVersion = loadedVersion
+        // Reapply costs when the loaded pricing is not the table the cached aggregates were costed
+        // with, so stale prices never reach the display layer. This covers a newer pricing version
+        // and a same-version edit to pricing.json.
+        if Self.recostSnapshot(&snapshot, pricing: pricing) {
             Persistence.save(snapshot)
         }
 
@@ -346,11 +342,23 @@ final class UsageStore: ObservableObject {
         refresh()
     }
 
+    /// Reprices the snapshot when `pricing` differs from the table it was costed with, then records
+    /// `pricing` as that table. Returns true when a recost ran, so the caller knows to persist.
+    /// `force` reprices even when the snapshot already matches, for an explicit user reload.
+    @discardableResult
+    nonisolated static func recostSnapshot(_ snapshot: inout Persistence.Snapshot,
+                                           pricing: PricingTable, force: Bool = false) -> Bool {
+        guard force || snapshot.needsRecost(pricing: pricing) else { return false }
+        Aggregator.recost(&snapshot.aggregates, pricing: pricing)
+        snapshot.pricingVersion = pricing.version ?? 0
+        snapshot.lastCostedPricing = pricing
+        return true
+    }
+
     /// Reload pricing.json from disk and recompute all costs.
     func reloadPricing() {
         pricing = Persistence.loadPricing()
-        Aggregator.recost(&snapshot.aggregates, pricing: pricing)
-        snapshot.pricingVersion = pricing.version ?? 0
+        Self.recostSnapshot(&snapshot, pricing: pricing, force: true)
         rebuildPublished()
         runTips()
         persist()
